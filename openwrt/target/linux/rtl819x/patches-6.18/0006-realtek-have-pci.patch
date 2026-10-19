@@ -1,0 +1,21 @@
+Объявляем поддержку PCI у платформы Realtek.
+
+Без HAVE_PCI переключатель CONFIG_PCI недоступен для выбора, и драйвер
+контроллера arch/mips/pci/pci-realtek.c не собирается. Драйвер вайфая
+rtl8192cd регистрируется как PCI-устройство, поэтому без шины он не
+увидит ни встроенную радиочасть, ни карту 5 ГГц.
+
+PCI_DRIVERS_LEGACY нужен потому, что драйвер контроллера написан старым
+способом: register_pci_controller и struct pci_controller.
+
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -717,6 +717,8 @@
+ config REALTEK
+ 	bool "Realtek RLX based SoC support"
+ 	select BOOT_RAW
++	select HAVE_PCI
++	select PCI_DRIVERS_LEGACY
+ 	select DMA_NONCOHERENT
+ 	select IRQ_MIPS_CPU
+ 	select USE_OF

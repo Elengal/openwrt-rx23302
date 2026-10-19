@@ -1,0 +1,28 @@
+#!/bin/sh
+
+. /lib/functions/uci-defaults.sh
+
+board_config_update
+
+# Гнёзда сидят на внешнем коммутаторе RTL8367D (драйвер rtl8367b, swconfig
+# switch0): порт 0 - синий WAN, порт 3 - LAN1, порт 4 - LAN2, порт 7 -
+# процессор (с метками). Порты 1, 2, 5, 6 не разведены.
+# Раскладку можно менять в LuCI: Сеть -> Коммутатор.
+#
+# ucidef_add_switch раздаёт группы 1 (lan) и 2 (wan); при первой загрузке
+# uci-defaults/06_switch_vlan_ids меняет их на стоковые 9 и 8 - их же ждёт
+# внутренний коммутатор 8197F (drivers/net/ethernet/rtl819x_eth.c).
+#
+# LAN по-прежнему 192.168.0.1, как на стоке: домашние сети обычно живут на
+# 192.168.1.x, и тогда адрес провайдера в WAN не пересекается с LAN.
+#
+# Ports of the external RTL8367D switch (swconfig switch0): 0 = blue WAN,
+# 3 = LAN1, 4 = LAN2, 7 = CPU (tagged). VLANs become 9 (LAN) and 8 (WAN)
+# on first boot, see uci-defaults/06_switch_vlan_ids.
+ucidef_add_switch "switch0" \
+	"3:lan:1" "4:lan:2" "0:wan" "7t@eth0"
+ucidef_set_interface "lan" protocol "static" ipaddr "192.168.0.1" netmask "255.255.255.0"
+
+board_config_flush
+
+exit 0

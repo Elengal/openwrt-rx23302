@@ -1,0 +1,824 @@
+From: openwrt-rx23302
+Date: Tue, 6 Oct 2026 08:30:00 +0300
+Subject: [PATCH] wext: htmode, survey, band, country, signal and chip name for rtl8192cd
+
+Found on the board (ELECTRA RX23302, rtl8192fe 3.8.0, OpenWrt snapshot, LuCI master)
+on 05.10.2026, with a browser walk through LuCI:
+
+- .htmode was NULL in wext_ops. rpcd calls it unchecked (rpc_iwinfo_call_hw_ht_mode),
+  so every "ubus call iwinfo info" (LuCI channel analysis) crashed rpcd with SIGSEGV at
+  address 0, dropping all LuCI sessions. Now read from the driver: net_work_type
+  (mib_operation) + currBW(op) (mib_11n). .survey added for the same reason ("no data").
+- wext_get_freqlist() left band and flags uninitialised: 5180 MHz was reported as a
+  2.4 GHz channel with random flags, and LuCI offered no 5 GHz channel. memset + band
+  by frequency, like nl80211_freq2band().
+- country: "00" stub -> MIB "countrystr" of the driver (get_mib ioctl); countrylist =
+  the 100 countries of the driver's own table (8192cd_11h.c), so LuCI offers them (v4).
+- signal/quality of an access point: average RSSI of its stations (sta_info), on the
+  nl80211 scale (quality 0..70), instead of nothing.
+- hardware name: "Realtek RTL8197G" / "Realtek RTL8812F" (mib_rf chipVersion); hardware_id
+  succeeds (IDs 0, no bus) so that rpcd-mod-luci passes the name on to LuCI.
+- scan: iwinfo_wext_scan.c had its own wext_ioctl() without the UCI radio name
+  resolution of patch 204, so LuCI's "Scan" (by "radio0") always found nothing
+  while "wlan0" found 8 networks. wext_uci_ifname() is now shared.
+- scan results: the driver reports a quality (RSSI %) with the level marked invalid,
+  rpcd printed "-256 dBm" for every network -> level derived from the RSSI; the
+  encryption comes as an IWEVCUSTOM text ("OPEN"/"WPA2-PSK"), not SIOCGIWENCODE,
+  so every network showed "None"; band/frequency filled from the channel (LuCI's
+  channel analysis drops cells without a band).
+- assoclist: transmit width from current_tx_BW (rate adaptation) instead of tx_bw
+  (station capability; a 40 MHz capable phone showed 40 MHz on an HT20 network),
+  VHT receive rate key "rx_rate", fractional HT rates ("6.5", "72.2"), VHT short GI.
+
+All new paths are taken only for this driver: /proc/<ifname>/sta_info and mib_* exist
+only for rtl8192cd interfaces.
+
+--- a/iwinfo_wext.c
++++ b/iwinfo_wext.c
+@@ -59,7 +59,7 @@
+  * Scoped to this driver on purpose: iwinfo_uci_get_radio() only returns a section whose
+  * type option is rtl8192cd, so nothing else changes behaviour.
+  */
+-static const char * wext_uci_ifname(const char *name)
++const char * wext_uci_ifname(const char *name)
+ {
+ 	static char ifname[IFNAMSIZ];
+ 	struct uci_section *s;
+@@ -110,6 +110,213 @@
+ 	return 0;
+ }
+ 
++/*
++ * RX23302: netdev behind a name, for reading the driver's /proc/<ifname>/ files.
++ *
++ * LuCI and rpcd ask by UCI section ("radio1"). wext_ioctl() resolves that for ioctls
++ * (patch 204), /proc paths need the same. Returns a static buffer.
++ */
++static const char * wext_rtl_ifname(const char *name)
++{
++	static char ifname[IFNAMSIZ];
++	const char *resolved = wext_uci_ifname(name);
++
++	snprintf(ifname, sizeof(ifname), "%s", resolved ? resolved : name);
++
++	return ifname;
++}
++
++/*
++ * RX23302: read "key: value" from a text file the rtl8192cd driver publishes in
++ * /proc/<ifname>/ (mib_11n, mib_operation, mib_rf). The driver prints every key
++ * on its own line with leading spaces: "    currBW: 80M". The first match wins.
++ *
++ * Returns 0 and the trimmed value in buf, or -1 when the file or the key is
++ * missing. The key is matched whole: "currBW" does not match "currBW(op)".
++ */
++static int wext_rtl_proc_value(const char *ifname, const char *file,
++                               const char *key, char *buf, size_t len)
++{
++	FILE *f;
++	char path[64], line[256];
++	size_t klen = strlen(key);
++	int rv = -1;
++
++	snprintf(path, sizeof(path), "/proc/%s/%s", wext_rtl_ifname(ifname), file);
++
++	if (!(f = fopen(path, "r")))
++		return -1;
++
++	while (fgets(line, sizeof(line), f))
++	{
++		char *p = line, *e;
++
++		while (*p == ' ' || *p == '\t')
++			p++;
++
++		if (strncmp(p, key, klen) || p[klen] != ':')
++			continue;
++
++		p += klen + 1;
++
++		while (*p == ' ' || *p == '\t')
++			p++;
++
++		e = p + strlen(p);
++
++		while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
++			*--e = 0;
++
++		snprintf(buf, len, "%s", p);
++		rv = 0;
++		break;
++	}
++
++	fclose(f);
++
++	return rv;
++}
++
++/*
++ * RX23302: frequency band of a channel by its centre frequency, the same ranges
++ * as nl80211_freq2band() of the nl80211 backend.
++ */
++static uint8_t wext_rtl_freq2band(int mhz)
++{
++	if (mhz >= 5160 && mhz <= 5885)
++		return IWINFO_BAND_5;
++	else if (mhz >= 5925 && mhz <= 7125)
++		return IWINFO_BAND_6;
++	else if (mhz >= 58320 && mhz <= 69120)
++		return IWINFO_BAND_60;
++
++	return IWINFO_BAND_24;
++}
++
++/*
++ * RX23302: operating channel width of the interface in MHz, from
++ * /proc/<ifname>/mib_11n: "currBW(op): 80M" (CurrentChannelBW, what the radio
++ * runs right now) or, failing that, "currBW: 20M" (the configured width).
++ */
++static int wext_rtl_bw_mhz(const char *ifname)
++{
++	char val[32];
++
++	if (wext_rtl_proc_value(ifname, "mib_11n", "currBW(op)", val, sizeof(val)) &&
++	    wext_rtl_proc_value(ifname, "mib_11n", "currBW", val, sizeof(val)))
++		return -1;
++
++	return atoi(val);
++}
++
++/*
++ * RX23302: true when ifname belongs to the rtl8192cd driver (it publishes
++ * /proc/<ifname>/sta_info, other wext drivers do not).
++ */
++static int wext_rtl_is_rtl(const char *ifname)
++{
++	char path[64];
++
++	snprintf(path, sizeof(path), "/proc/%s/sta_info", wext_rtl_ifname(ifname));
++
++	return access(path, R_OK) == 0;
++}
++
++/*
++ * RX23302: signal of an access point = average signal of its associated
++ * stations, the way the nl80211 backend reports it (nl80211_fill_signal walks
++ * the station dump). The driver has no SIOCGIWSTATS handler (see patch 203);
++ * the RSSI of every station is in /proc/<ifname>/sta_info as dBm + 100
++ * (patch 200).
++ */
++static int wext_rtl_avg_signal(const char *ifname, int *buf)
++{
++	FILE *f;
++	char path[64], line[256];
++	int sum = 0, n = 0;
++
++	snprintf(path, sizeof(path), "/proc/%s/sta_info", wext_rtl_ifname(ifname));
++
++	if (!(f = fopen(path, "r")))
++		return -1;
++
++	while (fgets(line, sizeof(line), f))
++	{
++		char *p = line;
++
++		while (*p == ' ' || *p == '\t')
++			p++;
++
++		if (!strncmp(p, "rssi:", 5))
++		{
++			int rssi = atoi(p + 5);
++
++			if (rssi > 0 && rssi <= 100)
++			{
++				sum += rssi - 100;
++				n++;
++			}
++		}
++	}
++
++	fclose(f);
++
++	if (!n)
++		return -1;
++
++	*buf = sum / n;
++	return 0;
++}
++
++/*
++ * RX23302: the driver's private get_mib ioctl, as "iwpriv <if> get_mib <name>"
++ * of the vendor tools: SIOCDEVPRIVATE + 2, the MIB name goes in, the raw value
++ * comes back in the same buffer (8192cd_ioctl.c, RTL8192CD_IOCTL_GET_MIB).
++ * Strings come back NUL-terminated, at most as long as the MIB field.
++ */
++#ifndef SIOCDEVPRIVATE
++#define SIOCDEVPRIVATE	0x89F0
++#endif
++#define RTL8192CD_IOCTL_GET_MIB	(SIOCDEVPRIVATE + 0x2)
++
++static int wext_rtl_get_mib(const char *ifname, const char *name, char *buf, size_t len)
++{
++	struct iwreq wrq;
++	char data[64];
++
++	memset(&wrq, 0, sizeof(wrq));
++	memset(data, 0, sizeof(data));
++	snprintf(data, sizeof(data), "%s", name);
++
++	wrq.u.data.pointer = (caddr_t) data;
++	wrq.u.data.length  = strlen(data) + 1;
++
++	if (wext_ioctl(ifname, RTL8192CD_IOCTL_GET_MIB, &wrq) < 0)
++		return -1;
++
++	memcpy(buf, data, (len < sizeof(data)) ? len : sizeof(data));
++	return 0;
++}
++
++/*
++ * RX23302: chip model, from /proc/<ifname>/mib_rf "chipVersion: RTL8197G Test"
++ * or "RTL8812F MP". The second word is the vendor's cut tag, not a model.
++ */
++static int wext_rtl_chip(const char *ifname, char *buf, size_t len)
++{
++	char val[64], *sp;
++
++	if (wext_rtl_proc_value(ifname, "mib_rf", "chipVersion", val, sizeof(val)) ||
++	    strncmp(val, "RTL", 3))
++		return -1;
++
++	if ((sp = strchr(val, ' ')) != NULL)
++		*sp = 0;
++
++	snprintf(buf, len, "%s", val);
++	return 0;
++}
++
+ static void wext_close(void)
+ {
+ 	/* Nop */
+@@ -306,6 +513,10 @@
+ 	struct iwreq wrq;
+ 	struct iw_statistics stats;
+ 
++	/* RX23302: access point - average of its stations (see wext_rtl_avg_signal) */
++	if (wext_rtl_is_rtl(ifname))
++		return wext_rtl_avg_signal(ifname, buf);
++
+ 	wrq.u.data.pointer = (caddr_t) &stats;
+ 	wrq.u.data.length  = sizeof(struct iw_statistics);
+ 	wrq.u.data.flags   = 1;
+@@ -404,6 +615,24 @@
+ {
+ 	struct iwreq wrq;
+ 	struct iw_statistics stats;
++	int signal;
++
++	/* RX23302: quality from the average station signal, on the scale the
++	   nl80211 backend uses (cfg80211 wext compat: -110..-40 dBm -> 0..70);
++	   wext_get_quality_max() answers 70 for this driver accordingly. */
++	if (wext_rtl_is_rtl(ifname))
++	{
++		if (wext_rtl_avg_signal(ifname, &signal))
++			return -1;
++
++		if (signal < -110)
++			signal = -110;
++		else if (signal > -40)
++			signal = -40;
++
++		*buf = signal + 110;
++		return 0;
++	}
+ 
+ 	wrq.u.data.pointer = (caddr_t) &stats;
+ 	wrq.u.data.length  = sizeof(struct iw_statistics);
+@@ -423,6 +652,13 @@
+ 	struct iwreq wrq;
+ 	struct iw_range range;
+ 
++	/* RX23302: see wext_get_quality() */
++	if (wext_rtl_is_rtl(ifname))
++	{
++		*buf = 70;
++		return 0;
++	}
++
+ 	wrq.u.data.pointer = (caddr_t) &range;
+ 	wrq.u.data.length  = sizeof(struct iw_range);
+ 	wrq.u.data.flags   = 0;
+@@ -453,18 +689,20 @@
+  * signal = rssi - 100. Report noise as signal - snr.
+  */
+ 
+-static uint32_t wext_sta_last_number(const char *s)
++/*
++ * RX23302: the rate is the LAST token of the line and may be fractional. The
++ * driver prints HT rates from MCS_DATA_RATEStr (8192cd_proc.c): "MCS0 6.5",
++ * "MCS7 72.2" (short GI), "MCS15 144.4". The former wext_sta_last_number()
++ * took only all-digit tokens, so every fractional rate came out as 0 kbit/s.
++ * Returns kbit/s, 0 if the line has no rate.
++ */
++static uint32_t wext_sta_last_rate_kbps(const char *s)
+ {
+-	const char *p = s;
+-	uint32_t rv = 0;
++	const char *p = s, *tok = NULL, *start;
++	uint32_t whole = 0, frac = 0, scale = 1000;
+ 
+-	/* Take the final all-digit token: "VHT NSS2-MCS5  468" gives 468,
+-	   "6" gives 6, while "HT MCS7" has no such token and leaves the
+-	   rate unknown (0). */
+ 	while (*p)
+ 	{
+-		const char *start;
+-
+ 		while (*p && isspace((unsigned char)*p))
+ 			p++;
+ 
+@@ -476,42 +714,68 @@
+ 		if (p > start)
+ 		{
+ 			const char *q;
+-			int digits = 1;
++			int ok = isdigit((unsigned char)*start), dots = 0;
+ 
+-			for (q = start; q < p; q++)
++			for (q = start; ok && q < p; q++)
+ 			{
+-				if (!isdigit((unsigned char)*q))
+-				{
+-					digits = 0;
+-					break;
+-				}
++				if (*q == '.')
++					ok = (++dots == 1);
++				else if (!isdigit((unsigned char)*q))
++					ok = 0;
+ 			}
+ 
+-			if (digits)
+-				rv = (uint32_t)strtoul(start, NULL, 10);
++			if (ok)
++				tok = start;
+ 		}
+ 	}
+ 
+-	return rv;
++	if (!tok)
++		return 0;
++
++	while (isdigit((unsigned char)*tok))
++		whole = whole * 10 + (uint32_t)(*tok++ - '0');
++
++	if (*tok == '.')
++	{
++		tok++;
++
++		while (isdigit((unsigned char)*tok) && scale > 1)
++		{
++			scale /= 10;
++			frac += (uint32_t)(*tok++ - '0') * scale;
++		}
++	}
++
++	return whole * 1000 + frac;
+ }
+ 
+ static void wext_sta_parse_rate(const char *val, struct iwinfo_rate_entry *r)
+ {
+ 	const char *p;
+ 
++	/* "VHT NSS2-MCS9s  867", "MCS15 130" (HT: no "HT" in the text), "54" */
+ 	if (strstr(val, "VHT"))
+ 		r->is_vht = 1;
+-	else if (strstr(val, "HT"))
++	else if (strstr(val, "MCS"))
+ 		r->is_ht = 1;
+ 
+ 	if ((p = strstr(val, "MCS")) != NULL)
++	{
+ 		r->mcs = (int8_t)atoi(p + 3);
+ 
++		/* VHT: "MCS9s" = short guard interval (8192cd_proc.c) */
++		for (p += 3; isdigit((unsigned char)*p); p++)
++			;
++
++		if (*p == 's')
++			r->is_short_gi = 1;
++	}
++
+ 	if ((p = strstr(val, "NSS")) != NULL)
+ 		r->nss = (uint8_t)atoi(p + 3);
+ 
+ 	/* iwinfo stores the speed in kbit/s, the driver prints Mbit/s */
+-	r->rate = wext_sta_last_number(val) * 1000;
++	r->rate = wext_sta_last_rate_kbps(val);
+ }
+ 
+ static void wext_sta_parse_bw(const char *val, struct iwinfo_rate_entry *r)
+@@ -521,10 +785,11 @@
+ 	if (mhz <= 0)
+ 		return;
+ 
+-	r->mhz = (uint8_t)mhz;
+-
+-	if (mhz == 40)
+-		r->is_40mhz = 1;
++	/* RX23302: the field is 16 bit wide (mhz_hi:mhz, rpcd prints
++	   mhz_hi * 256 + mhz); "160M" did not fit into the low byte alone. */
++	r->mhz = (uint8_t)(mhz & 0xff);
++	r->mhz_hi = (uint8_t)(mhz >> 8);
++	r->is_40mhz = (mhz == 40);
+ }
+ 
+ static int wext_get_assoclist(const char *ifname, char *buf, int *len)
+@@ -627,9 +892,18 @@
+ 			e.tx_retries = (uint32_t)strtoul(val, NULL, 10);
+ 		else if (!strcmp(key, "current_tx_rate"))
+ 			wext_sta_parse_rate(val, &e.tx_rate);
+-		else if (!strcmp(key, "current_rx_rate"))
++		/* RX23302: a VHT receive rate is printed as "rx_rate: VHT NSS..",
++		   HT and legacy ones as "current_rx_rate: .." (8192cd_proc.c) */
++		else if (!strcmp(key, "current_rx_rate") || !strcmp(key, "rx_rate"))
+ 			wext_sta_parse_rate(val, &e.rx_rate);
+-		else if (!strcmp(key, "tx_bw"))
++		/* RX23302: transmit width = "current_tx_BW", the width the rate
++		   adaptation actually uses (phydm RA report). "tx_bw" is only what
++		   the station announced in its HT capabilities: a phone capable of
++		   40 MHz showed "40 MHz" on an HT20 network. "current_tx_BW" comes
++		   first in the file; "tx_bw" is used only if it is missing. */
++		else if (!strcmp(key, "current_tx_BW"))
++			wext_sta_parse_bw(val, &e.tx_rate);
++		else if (!strcmp(key, "tx_bw") && !e.tx_rate.mhz)
+ 			wext_sta_parse_bw(val, &e.tx_rate);
+ 		else if (!strcmp(key, "rx_bw"))
+ 			wext_sta_parse_bw(val, &e.rx_rate);
+@@ -739,8 +1013,16 @@
+ 
+ 		for(i = 0; i < range.num_frequency; i++)
+ 		{
++			/* RX23302: band and flags were left uninitialised, so rpcd
++			   reported stack garbage: 5180 MHz came out as band 2.4 GHz with
++			   random "no_ht40-/indoor_only" flags, and LuCI listed no 5 GHz
++			   channel at all. Zero the entry, derive the band from the
++			   frequency like the nl80211 backend does. */
++			memset(&entry, 0, sizeof(entry));
++
+ 			entry.mhz        = wext_freq2mhz(&range.freq[i]);
+ 			entry.channel    = range.freq[i].i;
++			entry.band       = wext_rtl_freq2band(entry.mhz);
+ 			entry.restricted = 0;
+ 
+ 			memcpy(&buf[bl], &entry, sizeof(struct iwinfo_freqlist_entry));
+@@ -756,14 +1038,63 @@
+ 
+ static int wext_get_country(const char *ifname, char *buf)
+ {
++	char cc[8];
++
++	/* RX23302: the regulatory country the driver really runs with, MIB
++	   "countrystr" (dot11CountryString, set from UCI option country by
++	   /lib/netifd/wireless/rtl8192cd.sh). LuCI showed "00" here although
++	   the radio worked under RU rules. */
++	if (wext_rtl_is_rtl(ifname) &&
++	    !wext_rtl_get_mib(ifname, "countrystr", cc, sizeof(cc)) &&
++	    isalpha((unsigned char)cc[0]) && isalpha((unsigned char)cc[1]))
++	{
++		buf[0] = (char)toupper((unsigned char)cc[0]);
++		buf[1] = (char)toupper((unsigned char)cc[1]);
++		buf[2] = 0;
++		return 0;
++	}
++
+ 	sprintf(buf, "00");
+ 	return 0;
+ }
+ 
++/*
++ * RX23302: countries the vendor driver rtl8192cd knows (countryIEArray in
++ * 8192cd_11h.c, 100 entries). The driver maps option country -> its own channel
++ * plan on open; a code outside this table falls back to the regdomain number.
++ * Offering only these lets LuCI show the "Country Code" select with real choices
++ * instead of hiding it (the stub returned nothing).
++ */
++static const char wext_rtl_countries[][3] = {
++	"AL", "DZ", "AR", "AM", "AU", "AT", "AZ", "BH", "BY", "BE", "BZ", "BO", "BR",
++	"BN", "BG", "CA", "CL", "CN", "CO", "CR", "HR", "CY", "CZ", "DK", "DO", "EC",
++	"EG", "SV", "EE", "FI", "FR", "GE", "DE", "GR", "GT", "HN", "HK", "HU", "IS",
++	"IN", "ID", "IR", "IE", "IL", "IT", "JP", "JO", "KZ", "KR", "KP", "KW", "LV",
++	"LB", "LI", "LT", "LU", "MO", "MK", "MY", "MX", "MC", "MA", "NL", "NZ", "NO",
++	"OM", "PK", "PA", "PE", "PH", "PL", "PT", "PR", "QA", "RO", "RU", "SA", "SG",
++	"SK", "SI", "ZA", "ES", "SE", "CH", "SY", "TW", "TH", "TT", "TN", "TR", "UA",
++	"AE", "GB", "US", "UY", "UZ", "VE", "VN", "YE", "ZW"
++};
++
+ static int wext_get_countrylist(const char *ifname, char *buf, int *len)
+ {
+-	/* Stub */
+-	return -1;
++	struct iwinfo_country_entry *e = (struct iwinfo_country_entry *)buf;
++	size_t i;
++	int count = 0;
++
++	if (!wext_rtl_is_rtl(ifname))
++		return -1;
++
++	for (i = 0; i < sizeof(wext_rtl_countries) / sizeof(wext_rtl_countries[0]); i++, e++, count++)
++	{
++		e->ccode[0] = wext_rtl_countries[i][0];
++		e->ccode[1] = wext_rtl_countries[i][1];
++		e->ccode[2] = 0;
++		e->iso3166 = (uint16_t)((e->ccode[0] << 8) | e->ccode[1]);
++	}
++
++	*len = count * sizeof(struct iwinfo_country_entry);
++	return 0;
+ }
+ 
+ /*
+@@ -854,6 +1185,81 @@
+ }
+ 
+ /*
++ * RX23302: current HT mode of an interface.
++ *
++ * The ops table had no .htmode at all (NULL), and rpcd calls it without a
++ * check in rpc_iwinfo_call_hw_ht_mode(): every "ubus call iwinfo info" -
++ * LuCI channel analysis, status pages - crashed rpcd with SIGSEGV at address 0
++ * and took all LuCI sessions with it (they live inside rpcd). 3 crashes on the
++ * board on 05.10.2026.
++ *
++ * Built from what the driver runs right now: the PHY family from
++ * /proc/<ifname>/mib_operation "net_work_type: BGN" / "ANAC" (802.11 modes
++ * enabled), the width from mib_11n "currBW(op)". A legacy radio (no N) has no
++ * HT mode: IWINFO_HTMODE_NOHT, as the nl80211 backend reports it.
++ */
++static int wext_get_htmode(const char *ifname, int *buf)
++{
++	char modes[16];
++	int mhz, vht, ht;
++
++	*buf = 0;
++
++	if (wext_rtl_proc_value(ifname, "mib_operation", "net_work_type",
++	                        modes, sizeof(modes)))
++		return -1;
++
++	vht = (strstr(modes, "AC") != NULL);
++	ht  = vht || (strchr(modes, 'N') != NULL);
++
++	if (!ht)
++	{
++		*buf = IWINFO_HTMODE_NOHT;
++		return 0;
++	}
++
++	if ((mhz = wext_rtl_bw_mhz(ifname)) < 0)
++		return -1;
++
++	switch (mhz)
++	{
++	case 20:
++		*buf = vht ? IWINFO_HTMODE_VHT20 : IWINFO_HTMODE_HT20;
++		break;
++
++	case 40:
++		*buf = vht ? IWINFO_HTMODE_VHT40 : IWINFO_HTMODE_HT40;
++		break;
++
++	case 80:
++		*buf = IWINFO_HTMODE_VHT80;
++		break;
++
++	case 160:
++		*buf = IWINFO_HTMODE_VHT160;
++		break;
++
++	default:
++		return -1;
++	}
++
++	return 0;
++}
++
++/*
++ * RX23302: channel survey. The driver keeps no per-channel airtime counters
++ * (its /proc/<ifname>/acs_score_info holds scores of the last automatic
++ * channel selection, all zero with a fixed channel). The op exists so that no
++ * caller can ever jump through a NULL pointer again (see wext_get_htmode),
++ * and honestly reports "no data".
++ */
++static int wext_get_survey(const char *ifname, char *buf, int *len)
++{
++	*len = 0;
++	return -1;
++}
++
++/*
+  * HH71VM: encryption type for vendor driver rtl8192cd.
+  *
+  * This used to be a stub marked "No reliable crypto info in wext": Wireless
+@@ -1018,11 +1424,34 @@
+ 	if (data)
+ 		id->subsystem_vendor_id = strtoul(data, NULL, 16);
+ 
++	/* RX23302: rpcd-mod-luci (getWirelessDevices) reports the hardware name
++	   only when this call succeeds, so LuCI titled both radios "Generic".
++	   rtl8192cd radios are not on a bus Linux knows (the 8197G is in the
++	   SoC, the 8812FE sits behind the vendor's own PCIe glue): no IDs to
++	   report, they stay 0; the name comes from wext_get_hardware_name(). */
++	if (!(id->vendor_id > 0 && id->device_id > 0) && wext_rtl_is_rtl(ifname))
++	{
++		char chip[32];
++
++		if (!wext_rtl_chip(ifname, chip, sizeof(chip)))
++			return 0;
++	}
++
+ 	return (id->vendor_id > 0 && id->device_id > 0) ? 0 : -1;
+ }
+ 
+ static int wext_get_hardware_name(const char *ifname, char *buf)
+ {
++	char chip[32];
++
++	/* RX23302: "Realtek RTL8197G" / "Realtek RTL8812F" instead of
++	   "Generic WEXT": LuCI shows this as the radio title. */
++	if (!wext_rtl_chip(ifname, chip, sizeof(chip)))
++	{
++		sprintf(buf, "Realtek %s", chip);
++		return 0;
++	}
++
+ 	sprintf(buf, "Generic WEXT");
+ 	return 0;
+ }
+@@ -1059,6 +1488,7 @@
+ 	.mbssid_support   = wext_get_mbssid_support,
+ 	.hwmodelist       = wext_get_hwmodelist,
+ 	.htmodelist       = wext_get_htmodelist,
++	.htmode           = wext_get_htmode,
+ 	.mode             = wext_get_mode,
+ 	.ssid             = wext_get_ssid,
+ 	.bssid            = wext_get_bssid,
+@@ -1072,5 +1502,6 @@
+ 	.scanlist         = wext_get_scanlist,
+ 	.freqlist         = wext_get_freqlist,
+ 	.countrylist      = wext_get_countrylist,
++	.survey           = wext_get_survey,
+ 	.close            = wext_close
+ };
+--- a/iwinfo_wext.h
++++ b/iwinfo_wext.h
+@@ -379,4 +379,8 @@
+ 
+ int wext_get_scanlist(const char *ifname, char *buf, int *len);
+ 
++/* RX23302: UCI radio section name -> netdev of an rtl8192cd radio, or NULL
++   (iwinfo_wext.c, patch 204); shared with the scan code (patch 205). */
++const char * wext_uci_ifname(const char *name);
++
+ #endif
+--- a/iwinfo_wext_scan.c
++++ b/iwinfo_wext_scan.c
+@@ -25,7 +25,12 @@
+ 
+ static int wext_ioctl(const char *ifname, int cmd, struct iwreq *wrq)
+ {
+-	strncpy(wrq->ifr_name, ifname, IFNAMSIZ - 1);
++	/* RX23302: LuCI scans by radio section ("radio0"), resolve it like
++	   iwinfo_wext.c does; without this the scan of an rtl8192cd radio
++	   was always empty in LuCI (by netdev name it found 8 networks). */
++	const char *resolved = wext_uci_ifname(ifname);
++
++	strncpy(wrq->ifr_name, resolved ? resolved : ifname, IFNAMSIZ - 1);
+ 	return iwinfo_ioctl(cmd, wrq);
+ }
+ 
+@@ -303,10 +308,71 @@
+ 			break;
+ 
+ 		case IWEVQUAL:
++			/* RX23302: rtl8192cd reports only a quality, the RSSI in percent
++			   (8192cd_comapi.c rtl_giwscan: qual = bss.rssi, level marked
++			   IW_QUAL_LEVEL_INVALID). The level byte then is 0 and rpcd turned
++			   it into "-256 dBm". Its RSSI is dBm + 100 (as in sta_info), so
++			   derive the level from it; dBm in iwinfo is stored + 0x100. */
++			if (event->u.qual.updated & IW_QUAL_LEVEL_INVALID)
++			{
++				int rssi = event->u.qual.qual;
++
++				e->signal = (uint8_t)((rssi > 0 && rssi <= 100) ? (rssi - 100 + 0x100) : 0);
++				e->quality = (uint8_t)rssi;
++				e->quality_max = 100;
++				break;
++			}
++
+ 			e->signal = event->u.qual.level;
+ 			e->quality = event->u.qual.qual;
+ 			e->quality_max = iw_range->max_qual.qual;
+ 			break;
++
++		case IWEVCUSTOM:
++			/* RX23302: rtl8192cd has no SIOCGIWENCODE in its scan (disabled
++			   with "#if 0"), it sends a text instead: "OPEN", "WEP",
++			   "WPA-PSK/WPA2-PSK", "WPA2-PSK", "WPA3".. (rtl_giwscan). The
++			   cipher details come from the WPA/RSN IEs that follow. */
++			if (event->u.data.pointer && event->u.data.length)
++			{
++				char txt[64];
++				size_t n = event->u.data.length;
++
++				if (n >= sizeof(txt))
++					n = sizeof(txt) - 1;
++
++				memcpy(txt, event->u.data.pointer, n);
++				txt[n] = 0;
++
++				if (!strcmp(txt, "OPEN"))
++					e->crypto.enabled = 0;
++				else if (!strcmp(txt, "WEP"))
++					e->crypto.enabled = 1;
++				else if (!strncmp(txt, "WPA", 3))
++				{
++					/* Versions from the text too: when the driver could not
++					   cut the IEs out of the frame, an encrypted cell with
++					   no WPA version would be shown as WEP. The IEs, when
++					   present, add the details (ciphers) on top. */
++					e->crypto.enabled = 1;
++
++					if (strstr(txt, "WPA-PSK") || !strncmp(txt, "WPA/", 4) || !strcmp(txt, "WPA"))
++						e->crypto.wpa_version |= 1;
++
++					if (strstr(txt, "WPA2"))
++						e->crypto.wpa_version |= 2;
++
++					if (strstr(txt, "WPA3"))
++					{
++						e->crypto.wpa_version |= 4;
++						e->crypto.auth_suites |= IWINFO_KMGMT_SAE;
++					}
++
++					if (strstr(txt, "-PSK"))
++						e->crypto.auth_suites |= IWINFO_KMGMT_PSK;
++				}
++			}
++			break;
+ #if 0
+ 		case SIOCGIWRATE:
+ 			if(state->val_index == 0)
+@@ -336,6 +402,39 @@
+ }
+ 
+ 
++/* RX23302: see the caller in wext_get_scanlist() */
++static void wext_scan_fill_band(const struct iw_range *range, struct iwinfo_scanlist_entry *e)
++{
++	int i, mhz = 0;
++
++	for (i = 0; e->channel && i < range->num_frequency; i++)
++	{
++		if (range->freq[i].i == e->channel)
++		{
++			mhz = (int)(wext_freq2float(&range->freq[i]) / 1000000);
++			break;
++		}
++	}
++
++	if (!mhz && e->channel)
++		mhz = (e->channel <= 14) ? ((e->channel == 14) ? 2484 : 2407 + e->channel * 5)
++		                         : 5000 + e->channel * 5;
++
++	if (!mhz)
++		return;
++
++	e->mhz = (uint32_t)mhz;
++
++	if (mhz >= 5925 && mhz <= 7125)
++		e->band = IWINFO_BAND_6;
++	else if (mhz >= 5160 && mhz <= 5885)
++		e->band = IWINFO_BAND_5;
++	else if (mhz >= 58320 && mhz <= 69120)
++		e->band = IWINFO_BAND_60;
++	else
++		e->band = IWINFO_BAND_24;
++}
++
+ int wext_get_scanlist(const char *ifname, char *buf, int *len)
+ {
+ 	struct iwreq wrq;
+@@ -495,6 +594,12 @@
+ 								if( !e.crypto.enabled )
+ 									memset(&e.crypto, 0, sizeof(struct iwinfo_crypto_entry));
+ 
++								/* RX23302: band and centre frequency from the
++								   channel via the radio's own range, like the
++								   nl80211 backend fills them; LuCI's channel
++								   analysis skips cells whose band != the tab's. */
++								wext_scan_fill_band(&range, &e);
++
+ 								memcpy(&buf[entrylen], &e, sizeof(struct iwinfo_scanlist_entry));
+ 								entrylen += sizeof(struct iwinfo_scanlist_entry);
+ 							}

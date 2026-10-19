@@ -1,0 +1,88 @@
+From: openwrt-rx23302
+Date: Thu, 15 Oct 2026 15:30:00 +0300
+Subject: [PATCH] wext: cache the rtl8192cd chip name instead of re-reading mib_rf
+
+Every read of /proc/<ifname>/mib_rf makes the rtl8192fe driver measure the
+radio temperature (phy_set_rf_reg + 2x mdelay(10) per RF path), and the file
+is larger than a seq_file page, so its show runs twice. hardware_id() and
+hardware_name() read it for the chip name: ~64 ms of busy CPU per call on the
+RX23302, eight calls per luci-rpc getWirelessDevices (~0.5 s, every 5 s while
+a LuCI overview page is open). The chip never changes at run time: keep it in
+a per-process cache and in /var/run/iwinfo-rtl-chip.<ifname>.
+
+Measured on the board (per-op timer, 120 calls): hardware_id 64 ms -> see
+commit message of the firmware tree for the after-numbers.
+--- a/iwinfo_wext.c
++++ b/iwinfo_wext.c
+@@ -304,14 +304,65 @@
+  */
+ static int wext_rtl_chip(const char *ifname, char *buf, size_t len)
+ {
+-	char val[64], *sp;
++	/*
++	 * RX23302: reading mib_rf is expensive. Every read makes the driver
++	 * measure the radio temperature (phy_set_rf_reg + 2x mdelay(10) per
++	 * path, 8192cd_proc.c), and the file is larger than one seq_file page,
++	 * so the whole show runs twice: ~20 ms on wlan0, ~40 ms on wlan1, with
++	 * the CPU spinning. LuCI asks for the chip name 4 times per radio on
++	 * every getWirelessDevices (every 5 s on the overview pages).
++	 * The chip does not change at run time: remember it per interface in
++	 * the process (rpcd keeps libiwinfo loaded) and in /var/run for
++	 * short-lived callers (the iwinfo CLI).
++	 */
++	static char cache_if[4][IFNAMSIZ], cache_chip[4][32];
++	static int cache_n;
++	char rif[IFNAMSIZ], val[64], path[64], *sp;
++	FILE *f;
++	int i;
+ 
+-	if (wext_rtl_proc_value(ifname, "mib_rf", "chipVersion", val, sizeof(val)) ||
+-	    strncmp(val, "RTL", 3))
+-		return -1;
++	snprintf(rif, sizeof(rif), "%s", wext_rtl_ifname(ifname));
+ 
+-	if ((sp = strchr(val, ' ')) != NULL)
+-		*sp = 0;
++	for (i = 0; i < cache_n; i++)
++		if (!strcmp(cache_if[i], rif))
++		{
++			snprintf(buf, len, "%s", cache_chip[i]);
++			return 0;
++		}
++
++	snprintf(path, sizeof(path), "/var/run/iwinfo-rtl-chip.%s", rif);
++	val[0] = 0;
++
++	if ((f = fopen(path, "r")) != NULL)
++	{
++		if (!fgets(val, sizeof(val), f))
++			val[0] = 0;
++		fclose(f);
++		val[strcspn(val, "\r\n")] = 0;
++	}
++
++	if (strncmp(val, "RTL", 3))
++	{
++		if (wext_rtl_proc_value(ifname, "mib_rf", "chipVersion", val, sizeof(val)) ||
++		    strncmp(val, "RTL", 3))
++			return -1;
++
++		if ((sp = strchr(val, ' ')) != NULL)
++			*sp = 0;
++
++		if ((f = fopen(path, "w")) != NULL)
++		{
++			fprintf(f, "%s\n", val);
++			fclose(f);
++		}
++	}
++
++	if (cache_n < 4)
++	{
++		snprintf(cache_if[cache_n], sizeof(cache_if[0]), "%s", rif);
++		snprintf(cache_chip[cache_n], sizeof(cache_chip[0]), "%s", val);
++		cache_n++;
++	}
+ 
+ 	snprintf(buf, len, "%s", val);
+ 	return 0;

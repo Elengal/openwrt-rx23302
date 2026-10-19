@@ -1,0 +1,24 @@
+From: RX23302 port
+Subject: [PATCH] mtd: spi-nor: xmc: skip SFDP on XM25QH128C
+
+Контроллер SPI у Realtek RTL8197F не умеет читать SFDP (cmd 0x5A):
+в драйвере spi-sheipa ветка однобитного режима не реализована
+(заглушка "flash mode error"), команда не уходит, и инициализация
+флеша вешает ядро.
+
+Ядро проверяет SPI_NOR_SKIP_SFDP именно в no_sfdp_flags (core.c:3131),
+поэтому флаг ставится туда же. Всё нужное для работы задано статически:
+16 МБ, стирание 4K, режимы dual/quad.
+
+--- a/drivers/mtd/spi-nor/xmc.c
++++ b/drivers/mtd/spi-nor/xmc.c
+@@ -28,7 +28,8 @@
+ 		.id = SNOR_ID(0x20, 0x40, 0x18),
+ 		.name = "XM25QH128C",
+ 		.size = SZ_16M,
+-		.no_sfdp_flags = SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
++		.no_sfdp_flags = SPI_NOR_SKIP_SFDP | SECT_4K |
++				 SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ,
+ 	},
+ };
+ 

@@ -1,0 +1,166 @@
+// SPDX-License-Identifier: GPL-2.0
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "realtek,rtl8197f-soc";
+
+	cpus {
+		cpu@0 {
+			compatible = "mips,mips24KEc";
+		};
+	};
+
+	cpuintc: cpuintc {
+		#address-cells = <0>;
+		#interrupt-cells = <1>;
+		interrupt-controller;
+		compatible = "mti,cpu-interrupt-controller";
+	};
+
+	soc {
+		compatible = "simple-bus";
+		ranges = <0x0 0x18000000 0x10000>;
+
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		sysc: system-controller@0 {
+			compatible = "realtek,rtl819x-sysc";
+			reg = <0x0 0x1000>;
+		};
+
+		memc: memory-controller@1000 {
+			compatible = "realtek,rtl819x-memc";
+			reg = <0x1000 0x100>;
+		};		
+
+		intc: intc@3000 {
+			compatible = "realtek,rtl819x-intc";
+			reg = <0x3000 0x100>;
+
+			interrupt-controller;
+			#interrupt-cells = <1>;
+
+			interrupt-parent = <&cpuintc>;
+			interrupts = <2>;
+		};
+
+		gpio0: gpio-controller@3500 {
+			compatible = "realtek,rtl8197f-gpio";
+			reg = <0x3500 0x1c>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			status = "disabled";
+		};
+
+		gpio1: gpio-controller@351C {
+			compatible = "realtek,rtl8197f-gpio";
+			reg = <0x351C 0x1c>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			status = "disabled";
+		};
+	};
+
+	serial0: serial@18147000 {
+		compatible = "realtek,rtl8197f-uart", "snps,dw-apb-uart";
+		reg = <0x18147000 0x100>;
+
+		interrupt-parent = <&intc>;
+		interrupts = <9>;
+
+		reg-io-width = <4>;
+		reg-shift = <2>;
+		clock-frequency = <100000000>;
+	};
+
+	/*
+	 * Ethernet: CPU-интерфейс свитч-ядра.
+	 * 0x18010000 — вендорский CPU_IFACE_BASE (0xB8010000 в KSEG1),
+	 * лежит сразу за диапазоном шины soc, поэтому узел в корне.
+	 */
+	ethernet: ethernet@18010000 {
+		compatible = "realtek,rtl8197f-eth";
+		reg = <0x18010000 0x200>;
+
+		/*
+		 * Прерывание снято с живого устройства: в стоке
+		 * /proc/interrupts показывал "4: MIPS eth0" — линия идёт
+		 * прямо от процессора, минуя контроллер прерываний SoC.
+		 */
+		interrupt-parent = <&cpuintc>;
+		interrupts = <4>;
+
+		status = "disabled";
+	};
+
+	spi0: spi@18143000 {
+		compatible = "realtek,sheipa-spi";
+		reg = <0x18143000 0x1000
+			   0x10000000 0x2000000>;
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		clock-frequency = <100000000>;
+
+		status = "disabled";
+	};
+
+	/*
+	 * Источник тактирования шины PCIe.
+	 *
+	 * Частота ПРОЧИТАНА С ПЛАТЫ 30.08.2026, а не взята из чужого описания.
+	 * Вендор определяет её по перемычке, бит 24 регистра 0xB8000008
+	 * (arch/mips/rtl8197f/pci.c, PCIeMDIOPHYParameterSetRLE0600):
+	 *
+	 *     0xB8000008 = 0x41258AE0, бит 24 установлен -> 40 МГц
+	 *
+	 * Это важно: от частоты зависят значения настройки физического уровня
+	 * шины. В описании RTL819X.dtsi, откуда взят узел контроллера, стоит
+	 * 25 МГц — для нашей платы это неверно.
+	 */
+	pcieclk: pcieclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <40000000>;
+	};
+
+	/*
+	 * Контроллер PCIe.
+	 *
+	 * Описание взято из RTL819X.dtsi и проверено по вендорскому bspchip.h
+	 * для нашего чипа — все адреса совпали:
+	 *     BSP_PCIE_RC_CFG  0xb8b00000 -> 0x18b00000
+	 *     BSP_PCIE_EP_CFG  0xb8b10000 -> 0x18b10000
+	 *     BSP_PCIE_IO_BASE 0xb8c00000 -> 0x18c00000, размер 0x200000
+	 *     BSP_PCIE_IRQ     базовое + 5 -> прерывание 5
+	 *
+	 * Драйвер контроллера: arch/mips/pci/pci-realtek.c, совпадение по
+	 * строке realtek,rtl8196b-pci.
+	 *
+	 * Зачем: драйвер вайфая rtl8192cd регистрируется как PCI-устройство.
+	 */
+	pcie0: pcie-controller@18b00000 {
+		compatible = "realtek,rtl8196b-pci";
+		#address-cells = <3>;
+		#size-cells = <2>;
+		bus-range = <0 255>;
+		reg = <0x18b00000 0x1000>,	/* настройка корневого моста */
+		      <0x18b01000 0x1000>,	/* её расширение */
+		      <0x18b10000 0x1000>,	/* настройка устройства 0 */
+		      <0x18b11000 0x1000>;	/* настройка устройства 1 */
+		reg-names = "rc_cfg_base", "rc_ext_base",
+			    "dev_cfg0_base", "dev_cfg1_base";
+		ranges = <0x02000000 0 0x00000000 0x19000000 0 0x01000000	/* память */
+			  0x01000000 0 0x00000000 0x18c00000 0 0x00200000>;	/* ввод-вывод */
+		interrupt-parent = <&cpuintc>;
+		interrupts = <5>;
+		clocks = <&pcieclk>;
+
+		status = "disabled";
+	};
+
+};

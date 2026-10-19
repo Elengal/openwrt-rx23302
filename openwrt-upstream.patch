@@ -1,0 +1,82 @@
+diff --git a/include/package.mk b/include/package.mk
+index d4d67413..77459506 100644
+--- a/include/package.mk
++++ b/include/package.mk
+@@ -91,6 +91,16 @@ ifneq ($(wildcard $(PKG_BUILD_DIR)/.source_dir),)
+   QUILT:=1
+ endif
+ 
++# RX23302: patches for packages that come from feeds. Feeds are git checkouts pinned
++# by commit and are not edited; their packages read patches from ./patches only, which
++# would mean writing into the feed. $(TOPDIR)/feeds-patches/<PKG_NAME>/ is used instead
++# when it exists, applied by the usual Build/Patch, and it takes part in the prepare
++# stamp, so changing a patch rebuilds the package.
++ifneq ($(wildcard $(TOPDIR)/feeds-patches/$(PKG_NAME)/*.patch),)
++  PATCH_DIR:=$(TOPDIR)/feeds-patches/$(PKG_NAME)
++  PKG_FILE_DEPENDS += $(TOPDIR)/feeds-patches/$(PKG_NAME)
++endif
++
+ include $(INCLUDE_DIR)/quilt.mk
+ 
+ find_library_dependencies = \
+diff --git a/package/network/config/netifd/files/lib/netifd/utils.uc b/package/network/config/netifd/files/lib/netifd/utils.uc
+index b038efc5..9e9a0bbe 100644
+--- a/package/network/config/netifd/files/lib/netifd/utils.uc
++++ b/package/network/config/netifd/files/lib/netifd/utils.uc
+@@ -54,8 +54,20 @@ export function handler_load(path, cb)
+ 		system(`./${script} "" "dump" >&${f.fileno()}`);
+ 		chdir(prev_dir);
+ 		f.seek();
+-		while (!f.error()) {
+-			let data = trim(f.read("line"));
++		// RX23302: было `while (!f.error())`. Две беды:
++		// 1) на конце файла read("line") возвращает пусто, а ошибку не ставит
++		//    (getline -1 при errno 0) - цикл крутился вечно, netifd вис на 100%
++		//    CPU, как только в /lib/netifd/wireless/ появлялся обработчик;
++		// 2) f.error() - общий на весь модуль fs флаг последней ошибки: чужая
++		//    неудачная операция до цикла (видели на роутере) делала его
++		//    непустым, и цикл для следующего скрипта не начинался вовсе -
++		//    обработчик молча не загружался.
++		// Проверено на ucode 2026-07-09 (b885dd0f). Читаем до пустой строки.
++		for (;;) {
++			let line = f.read("line");
++			if (!length(line))
++				break;
++			let data = trim(line);
+ 			try {
+ 				data = json(data);
+ 			} catch (e) {
+diff --git a/package/network/utils/iwinfo/Makefile b/package/network/utils/iwinfo/Makefile
+index a809d4cc..936bb29f 100644
+--- a/package/network/utils/iwinfo/Makefile
++++ b/package/network/utils/iwinfo/Makefile
+@@ -18,7 +18,7 @@ PKG_MAINTAINER:=Jo-Philipp Wich <jo@mein.io>
+ PKG_LICENSE:=GPL-2.0
+ 
+ PKG_BUILD_FLAGS:=no-lto
+-PKG_CONFIG_DEPENDS:=CONFIG_WIFI_SCRIPTS_UCODE
++PKG_CONFIG_DEPENDS:=CONFIG_WIFI_SCRIPTS_UCODE CONFIG_TARGET_rtl819x
+ 
+ IWINFO_ABI_VERSION:=20230701
+ 
+@@ -83,7 +83,7 @@ MAKE_FLAGS += \
+ 	FPIC="$(FPIC)" \
+ 	CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
+ 	LDFLAGS="$(TARGET_LDFLAGS)" \
+-	BACKENDS="nl80211" \
++	BACKENDS="nl80211$(if $(CONFIG_TARGET_rtl819x), wext)" \
+ 	SOVERSION="$(IWINFO_ABI_VERSION)"
+ 
+ define Build/InstallDev
+diff --git a/tools/Makefile b/tools/Makefile
+index 79d3954f..a128a5ea 100644
+--- a/tools/Makefile
++++ b/tools/Makefile
+@@ -62,6 +62,7 @@ tools-y += mtools
+ tools-y += ninja
+ tools-y += padjffs2
+ tools-y += patch-image
++tools-y += cvimg
+ tools-y += patchelf
+ tools-y += pkgconf
+ tools-y += quilt

@@ -1,0 +1,22 @@
+Подключаем вендорский драйвер rtl8192fe 3.8.0 (RTL8197G 2.4 ГГц + RTL8812FE 5 ГГц)
+к дереву ядра, встроенным. Сам драйвер лежит в
+files-6.18/drivers/net/wireless/rtl8192fe, конфиг - rx23302.mk там же,
+символ ядра - Kconfig.rx23302 (включает Wireless Extensions для iwinfo/LuCI).
+
+--- a/drivers/net/wireless/Makefile
++++ b/drivers/net/wireless/Makefile
+@@ -23,3 +23,5 @@
+ obj-$(CONFIG_WLAN_VENDOR_ZYDAS) += zydas/
+ 
+ obj-$(CONFIG_WLAN) += virtual/
++
++obj-$(CONFIG_RTL8192FE_RX23302) += rtl8192fe/
+--- a/drivers/net/wireless/Kconfig
++++ b/drivers/net/wireless/Kconfig
+@@ -39,4 +39,6 @@
+ 
+ source "drivers/net/wireless/virtual/Kconfig"
+ 
++source "drivers/net/wireless/rtl8192fe/Kconfig.rx23302"
++
+ endif # WLAN

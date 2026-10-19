@@ -1,0 +1,31 @@
+From: RX23302 port
+Subject: [PATCH] net: ethernet: register RTL819x driver
+
+--- a/drivers/net/ethernet/Makefile
++++ b/drivers/net/ethernet/Makefile
+@@ -80,6 +80,7 @@
+ obj-$(CONFIG_NET_VENDOR_QLOGIC) += qlogic/
+ obj-$(CONFIG_NET_VENDOR_QUALCOMM) += qualcomm/
+ obj-$(CONFIG_NET_VENDOR_REALTEK) += realtek/
++obj-$(CONFIG_NET_RTL819X) += rtl819x_eth.o
+ obj-$(CONFIG_NET_VENDOR_RENESAS) += renesas/
+ obj-$(CONFIG_NET_VENDOR_RDC) += rdc/
+ obj-$(CONFIG_NET_VENDOR_ROCKER) += rocker/
+--- a/drivers/net/ethernet/Kconfig
++++ b/drivers/net/ethernet/Kconfig
+@@ -178,6 +178,15 @@
+ source "drivers/net/ethernet/qualcomm/Kconfig"
+ source "drivers/net/ethernet/rdc/Kconfig"
+ source "drivers/net/ethernet/realtek/Kconfig"
++
++config NET_RTL819X
++	tristate "Realtek RTL819x Ethernet support"
++	depends on REALTEK
++	select PHYLINK
++	help
++	  Ethernet-контроллер, встроенный в SoC Realtek RTL819x
++	  (RTL8196E / RTL8197D / RTL8197F).
++
+ source "drivers/net/ethernet/renesas/Kconfig"
+ source "drivers/net/ethernet/rocker/Kconfig"
+ source "drivers/net/ethernet/samsung/Kconfig"

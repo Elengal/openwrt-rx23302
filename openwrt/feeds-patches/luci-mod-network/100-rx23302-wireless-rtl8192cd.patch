@@ -1,0 +1,355 @@
+From: openwrt-rx23302
+Date: Tue, 6 Oct 2026 09:10:00 +0300
+Subject: [PATCH] luci-mod-network: wireless page for the vendor driver rtl8192cd
+
+The radios of ELECTRA RX23302 run the vendor driver rtl8192cd (rtl8192fe 3.8.0),
+driven by /lib/netifd/wireless/rtl8192cd.sh without hostapd: the driver does
+WPA-PSK itself, 802.11ac on the 5 GHz chip, access point mode only.
+
+LuCI only knows mac80211 (features probed from hostapd) and broadcom, so for
+hwtype 'rtl8192cd' it offered "No Encryption" as the ONLY choice: opening the
+"Edit" dialog of a WPA2 network and pressing "Save" turned it into an open network
+(found on the board 05.10.2026). Also no AC mode on 5 GHz, Client/Ad-Hoc modes that
+the driver script refuses, a "Join Network" button for them, and "undefined dBm"
+for the transmit power the driver does not report.
+
+- encryption: WPA2-PSK / WPA-PSK+WPA2-PSK / WPA-PSK (+ none), ciphers without
+  CCMP-256/GCMP (the script knows CCMP and TKIP only);
+- frequency: AC mode available for rtl8192cd (11ac is done by the driver);
+- mode: access point only, no wpad-mesh hint; no "Join Network" in the scan list;
+- status: Tx-Power line hidden when unknown instead of "undefined dBm";
+- key: the WPA key field no longer depends on ppsk=0 for rtl8192cd (the PPSK
+  flag is removed there, so the field stayed hidden and the password could not
+  be changed in LuCI; reported by Sanya 07.10.2026).
+
+v4 (06.10.2026, "show everything the hardware can do"): automatic channel, 20/40
+coexistence and forced 40 MHz, required mode N/AC, 802.11b, country (100 codes of the
+driver), cell density, beacon interval, RTS/fragmentation, distance, short GI 20/40/80,
+LDPC; per network: hidden SSID, WMM, client isolation, bridge isolation, MAC address,
+short preamble, DTIM, GTK rekey, inactivity limit, MAC filter (up to 128), WEP
+open/shared/both with keys 1-4. PPSK (hostapd + RADIUS) is not offered.
+v5: transmit power in percent (txpower_percent -> MIB powerpercent) and 802.11w
+(kernel built with CONFIG_RTL_11W_SUPPORT and POWER_PERCENT_ADJUSTMENT).
+
+Other drivers are not affected: every change is under hwtype == 'rtl8192cd'
+(and the Tx-Power line only drops a null value).
+
+--- a/htdocs/luci-static/resources/view/network/wireless.js
++++ b/htdocs/luci-static/resources/view/network/wireless.js
+@@ -192,7 +192,7 @@
+ 		_('BSSID'),      is_assoc ? bssid : null,
+ 		_('Encryption'), is_assoc ? radioNet.getActiveEncryption() ?? _('None') : null,
+ 		_('Channel'),    is_assoc ? `${radioNet.getChannel()} (${radioNet.getFrequency() ?? 0} ${_('GHz')})` : null,
+-		_('Tx-Power'),   is_assoc ? `${radioNet.getTXPower()} ${_('dBm')}` : null,
++		_('Tx-Power'),   (is_assoc && radioNet.getTXPower() != null) ? `${radioNet.getTXPower()} ${_('dBm')}` : null,
+ 		_('Signal'),     is_assoc ? `${radioNet.getSignal()} ${_('dBm')}` : null,
+ 		_('Noise'),      (is_assoc && noise != null) ? `${noise} ${_('dBm')}` : null,
+ 		_('Bitrate'),    is_assoc ? `${radioNet.getBitRate() ?? 0} ${_('Mbit/s')}` : null,
+@@ -344,6 +344,17 @@
+ 			const wifidevs = data[0];
+ 			const freqlist = data[1];
+ 
++			// RX23302: the vendor driver rtl8192cd runs its own 802.11 stack
++			// without hostapd, so the hostapd feature probes below say "no" for
++			// things the driver itself does: 11ac on the 5 GHz chip and the
++			// automatic channel selection (channel 0 = auto_channel of the driver).
++			const is_rtl = (wifidevs && wifidevs.get('type') == 'rtl8192cd');
++
++			if (is_rtl) {
++				this.channels['2g'] = [ 'auto', 'auto', { available: true } ];
++				this.channels['5g'] = [ 'auto', 'auto', { available: true } ];
++			}
++
+ 			freqlist.forEach(freq => {
+ 				if (!freq.band)
+ 					return;
+@@ -369,7 +380,7 @@
+ 			this.modes = [
+ 				'', 'Legacy', { available: hwmodelist.a || hwmodelist.b || hwmodelist.g },
+ 				'n', 'N', { available: hwmodelist.n },
+-				'ac', 'AC', { available: L.hasSystemFeature('hostapd', '11ac') && hwmodelist.ac },
++				'ac', 'AC', { available: (is_rtl || L.hasSystemFeature('hostapd', '11ac')) && hwmodelist.ac },
+ 				'ax', 'AX', { available: L.hasSystemFeature('hostapd', '11ax') && hwmodelist.ax },
+ 				'be', 'BE', { available: L.hasSystemFeature('hostapd', '11be') && hwmodelist.be }
+ 			];
+@@ -1064,6 +1075,75 @@
+ 					o.depends({'rxldpc': '1'});
+ 					o.default = '1';
+ 				}
++				else if (hwtype == 'rtl8192cd') {
++					// RX23302: everything the vendor driver rtl8192cd can do, wired
++					// through /lib/netifd/wireless/rtl8192cd.sh to its own MIB fields.
++					// Transmit power: the driver sets it as a percentage of its calibrated
++					// level (MIB powerpercent; no absolute dBm, hwsetting has no calibration).
++					o = ss.taboption('general', form.ListValue, 'txpower_percent', 'Мощность передачи', 'Процент от полной мощности радио. Меньше — меньше помех соседям и меньше зона покрытия.');
++					o.value('', '100% (полная)');
++					[ 75, 50, 35, 25, 15, 10 ].forEach(function(p) { o.value(String(p), p + '%'); });
++					o.rmempty = true;
++
++					o = ss.taboption('general', form.ListValue, 'require_mode', 'Обязательный режим', 'Не пускать клиентов, которые не поддерживают этот режим (старые устройства).');
++					o.value('', _('Any'));
++					o.value('n', 'N');
++					// AC exists only on the 5 GHz radio
++					if (uci.get('wireless', radioNet.getWifiDeviceName(), 'band') == '5g')
++						o.value('ac', 'AC');
++					o.rmempty = true;
++
++					o = ss.taboption('general', form.Flag, 'legacy_rates', _('Allow legacy 802.11b rates'), _('Legacy or badly behaving devices may require legacy 802.11b rates to interoperate. Airtime efficiency may be significantly reduced where these are used. It is recommended to not allow 802.11b rates where possible.'));
++					o.depends({'_freq': '2g', '!contains': true});
++					o.default = o.enabled;
++
++					o = ss.taboption('general', CBIWifiCountryValue, 'country', _('Country Code'));
++					o.wifiNetwork = radioNet;
++
++					o = ss.taboption('advanced', form.ListValue, 'cell_density', _('Coverage cell density'), _('Configures data rates based on the coverage cell density. Normal configures basic rates to 6, 12, 24 Mbps if legacy 802.11b rates are not used else to 5.5, 11 Mbps. High configures basic rates to 12, 24 Mbps if legacy 802.11b rates are not used else to the 11 Mbps rate. Very High configures 24 Mbps as the basic rate. Supported rates lower than the minimum basic rate are not offered.'));
++					o.value('0', _('Disabled'));
++					o.value('1', _('Normal'));
++					o.value('2', _('High'));
++					o.value('3', _('Very High'));
++
++					o = ss.taboption('advanced', form.Value, 'distance', _('Distance Optimization'), _('Distance to farthest network member in meters. Set only for distances above one kilometer; otherwise it is harmful.'));
++					o.datatype = 'or(range(0,114750),"auto")';
++					o.placeholder = 'auto';
++
++					o = ss.taboption('advanced', form.Value, 'frag', _('Fragmentation Threshold'));
++					o.datatype = 'range(256,2346)';
++					o.placeholder = _('off');
++
++					o = ss.taboption('advanced', form.Value, 'rts', _('RTS/CTS Threshold'));
++					o.datatype = 'range(0,2347)';
++					o.placeholder = _('off');
++
++					o = ss.taboption('advanced', form.Flag, 'noscan', _('Force 40MHz mode'), _('Always use 40MHz channels even if the secondary channel overlaps. Using this option does not comply with IEEE 802.11n-2009!'));
++					o.depends({'_freq': '2g', '!contains': true});
++					o.rmempty = true;
++
++					o = ss.taboption('advanced', form.Value, 'beacon_int', _('Beacon Interval'));
++					o.datatype = 'range(20,1024)';
++					o.placeholder = 100;
++					o.rmempty = true;
++
++					o = ss.taboption('advanced', form.Flag, 'short_gi_20', 'Короткий защитный интервал (SGI) 20 МГц', 'Короткий GI: скорость примерно +11% при хорошем сигнале.');
++					o.default = o.enabled;
++
++					o = ss.taboption('advanced', form.Flag, 'short_gi_40', 'Короткий защитный интервал (SGI) 40 МГц');
++					o.default = o.enabled;
++
++					o = ss.taboption('advanced', form.Flag, 'short_gi_80', 'Короткий защитный интервал (SGI) 80 МГц');
++					o.depends({'_freq': '5g', '!contains': true});
++					o.default = o.enabled;
++
++					o = ss.taboption('advanced', form.Flag, 'rxldpc', _('Rx LDPC'), _('Low-Density Parity-Check'));
++					o.default = '1';
++
++					o = ss.taboption('advanced', form.Flag, 'ldpc', _('Tx LDPC'));
++					o.depends({'rxldpc': '1'});
++					o.default = '1';
++				}
+ 
+ 
+ 				o = s.option(form.SectionValue, '_device', form.NamedSection, radioNet.getName(), 'wifi-iface', _('Interface Configuration'));
+@@ -1076,11 +1156,16 @@
+ 				ss.tab('advanced', _('Advanced Settings'));
+ 				ss.tab('roaming', _('WLAN Roaming'), _('Settings for assisting wireless clients in roaming between multiple APs: 802.11r, 802.11k and 802.11v'));
+ 
+-				o = ss.taboption('general', form.ListValue, 'mode', _('Mode') , !have_mesh ? '<a id="installmesh" href="%s" target="_blank" rel="noreferrer">%s</a>'
++				// RX23302: rtl8192cd is driven by /lib/netifd/wireless/rtl8192cd.sh,
++				// which sets up access points only (other modes fail with
++				// UNSUPPORTED_MODE); the mesh hint is about hostapd, not this driver.
++				o = ss.taboption('general', form.ListValue, 'mode', _('Mode') , (!have_mesh && hwtype != 'rtl8192cd') ? '<a id="installmesh" href="%s" target="_blank" rel="noreferrer">%s</a>'
+ 						.format(L.url('admin/system/package-manager') + '?query=wpad-mesh', _('802.11s? Install mesh wpad') ) : '');
+ 				o.value('ap', _('Access Point'));
+-				o.value('sta', _('Client'));
+-				o.value('adhoc', _('Ad-Hoc'));
++				if (hwtype != 'rtl8192cd') {
++					o.value('sta', _('Client'));
++					o.value('adhoc', _('Ad-Hoc'));
++				}
+ 
+ 				o = ss.taboption('general', form.Value, 'mesh_id', _('Mesh Id'));
+ 				o.depends('mode', 'mesh');
+@@ -1292,6 +1377,65 @@
+ 					o = ss.taboption('advanced', form.Flag, 'disassoc_low_ack', _('Disassociate On Low Acknowledgement'), _('Allow AP mode to disconnect STAs based on low ACK condition'));
+ 					o.default = o.enabled;
+ 				}
++				else if (hwtype == 'rtl8192cd') {
++					// RX23302: interface options the vendor driver rtl8192cd does itself
++					// (rtl8192cd.sh writes each one to its MIB field, on and off).
++					o = ss.taboption('macfilter', form.ListValue, 'macfilter', _('MAC Address Filter'));
++					o.depends('mode', 'ap');
++					o.value('', _('disable'));
++					o.value('allow', _('Allow listed only'));
++					o.value('deny', _('Allow all except listed'));
++
++					o = ss.taboption('macfilter', form.DynamicList, 'maclist', _('MAC-List'), 'До 128 адресов.');
++					o.datatype = 'macaddr';
++					o.retain = true;
++					o.depends('macfilter', 'allow');
++					o.depends('macfilter', 'deny');
++					o.load = function(section_id) {
++						return network.getHostHints().then(L.bind(function(hints) {
++							hints.getMACHints().map(L.bind(function(hint) {
++								this.value(hint[0], hint[1] ? '%s (%s)'.format(hint[0], hint[1]) : hint[0]);
++							}, this));
++
++							return form.DynamicList.prototype.load.apply(this, [section_id]);
++						}, this));
++					};
++
++					o = ss.taboption('general', form.Flag, 'hidden', _('Hide <abbr title="Extended Service Set Identifier">ESSID</abbr>'), _('Where the ESSID is hidden, clients may fail to roam and airtime efficiency may be significantly reduced.'));
++					o.depends('mode', 'ap');
++
++					o = ss.taboption('general', form.Flag, 'wmm', _('WMM Mode'), _('Where Wi-Fi Multimedia (WMM) Mode QoS is disabled, clients may be limited to 802.11a/802.11g rates.'));
++					o.depends('mode', 'ap');
++					o.default = o.enabled;
++
++					o = ss.taboption('advanced', form.Flag, 'isolate', _('Isolate Clients'), _('Prevents client-to-client communication'));
++					o.depends('mode', 'ap');
++
++					o = ss.taboption('advanced', form.Flag, 'bridge_isolate', _('Isolate Bridge Port'), _('Prevents communication only with targets on isolated bridge ports (while allowing it with targets on non-isolated ones). This also prevents client-to-client communication on the same interface when the WiFi device is in AP mode.'));
++
++					const macaddr = uci.get('wireless', radioNet.getName(), 'macaddr');
++					o = ss.taboption('advanced', form.Value, 'macaddr', _('MAC address'), _('Override default MAC address - the range of usable addresses might be limited by the driver'));
++					o.value('', _('driver default (%s)').format(!macaddr ? radioNet.getActiveBSSID() : _('no override')));
++					o.datatype = 'macaddr';
++
++					o = ss.taboption('advanced', form.Flag, 'short_preamble', _('Short Preamble'));
++					o.default = o.disabled;
++
++					o = ss.taboption('advanced', form.Value, 'dtim_period', _('DTIM Interval'), _('Delivery Traffic Indication Message Interval'));
++					o.optional = true;
++					o.placeholder = 1;
++					o.datatype = 'range(1,255)';
++
++					o = ss.taboption('advanced', form.Value, 'wpa_group_rekey', _('Time interval for rekeying GTK'), _('sec'));
++					o.optional    = true;
++					o.placeholder = _('off');
++					o.datatype    = 'uinteger';
++
++					o = ss.taboption('advanced', form.Value, 'max_inactivity', _('Station inactivity limit'), _('Units: seconds.'));
++					o.optional    = true;
++					o.placeholder = 300;
++					o.datatype    = 'range(1,21474836)';
++				}
+ 
+ 
+ 				encr = o = ss.taboption('encryption', form.ListValue, 'encryption', _('Encryption'));
+@@ -1339,9 +1483,14 @@
+ 				o.depends('encryption', 'psk-mixed');
+ 				o.value('auto', _('auto'));
+ 				o.value('ccmp', _('Force CCMP (AES)'));
+-				o.value('ccmp256', _('Force CCMP-256 (AES)'));
+-				o.value('gcmp', _('Force GCMP (AES)'));
+-				o.value('gcmp256', _('Force GCMP-256 (AES)'));
++				// RX23302: rtl8192cd knows CCMP and TKIP only (cipher mask in
++				// rtl8192cd.sh); a 256-bit or GCMP choice would silently fall
++				// back to CCMP there.
++				if (hwtype != 'rtl8192cd') {
++					o.value('ccmp256', _('Force CCMP-256 (AES)'));
++					o.value('gcmp', _('Force GCMP (AES)'));
++					o.value('gcmp256', _('Force GCMP-256 (AES)'));
++				}
+ 				o.value('tkip', _('Force TKIP'));
+ 				o.value('tkip+ccmp', _('Force TKIP and CCMP (AES)'));
+ 				o.write = ss.children.filter(function(o) { return o.option == 'encryption'; })[0].write;
+@@ -1500,6 +1649,21 @@
+ 					crypto_modes.push(['wep-open',   _('WEP Open System'),        11]);
+ 					crypto_modes.push(['wep-shared', _('WEP Shared Key'),         10]);
+ 				}
++				else if (hwtype == 'rtl8192cd') {
++					// RX23302: WPA-PSK and WEP are done by the driver itself (its own
++					// authenticator, no hostapd), see
++					// /lib/netifd/wireless/rtl8192cd.sh. Without this branch the
++					// list held "No Encryption" only, so opening the dialog and
++					// pressing Save turned a WPA2 network into an OPEN one.
++					// EAP needs an external authenticator (no hostapd in the image),
++					// SAE/WPA3 and OWE are not built into the driver: not offered.
++					crypto_modes.push(['psk2',       'WPA2-PSK',                    35]);
++					crypto_modes.push(['psk-mixed',  'WPA-PSK/WPA2-PSK Mixed Mode', 22]);
++					crypto_modes.push(['psk',        'WPA-PSK',                     12]);
++					crypto_modes.push(['wep-open',   _('WEP Open System'),         11]);
++					crypto_modes.push(['wep-shared', _('WEP Shared Key'),          10]);
++					crypto_modes.push(['wep-mixed',  _('WEP Open System') + ' / ' + _('WEP Shared Key'), 10]);
++				}
+ 
+ 				crypto_modes.push(['none',       _('No Encryption'),   0]);
+ 
+@@ -1711,7 +1875,12 @@
+ 				// End QR Code
+ 
+ 				o = ss.taboption('encryption', form.Flag, 'ppsk', _('Enable Private PSK (PPSK)'), _('Private Pre-Shared Key (PPSK) allows the use of different Pre-Shared Key for each STA MAC address. Private MAC PSKs are stored on the RADIUS server.'));
+-				add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'] });
++				// RX23302: PPSK is a hostapd feature (keys from RADIUS); rtl8192cd has
++				// its own authenticator without RADIUS, so it is not offered there.
++				if (hwtype != 'rtl8192cd')
++					add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'] });
++				else
++					ss.children.splice(ss.children.indexOf(o), 1);
+ 
+ 				o = ss.taboption('encryption', form.Value, 'auth_server', _('RADIUS Authentication Server'));
+ 				add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['wpa', 'wpa2', 'wpa3', 'wpa3-mixed', 'wpa3-192'] });
+@@ -1838,7 +2007,13 @@
+ 
+ 
+ 				o = ss.taboption('encryption', form.Value, '_wpa_key', _('Key'));
+-				add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'], ppsk: ['0'] });
++				// RX23302: on rtl8192cd the PPSK flag is removed from the form (no RADIUS),
++				// so a dependency on ppsk=0 can never be met and the key field stayed
++				// hidden. Depend on mode/encryption only there.
++				if (hwtype != 'rtl8192cd')
++					add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'], ppsk: ['0'] });
++				else
++					add_dependency_permutations(o, { mode: ['ap', 'ap-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'] });
+ 				add_dependency_permutations(o, { mode: ['sta', 'adhoc', 'mesh', 'sta-wds'], encryption: ['psk', 'psk2', 'psk+psk2', 'psk-mixed'] });
+ 				o.depends('encryption', 'sae');
+ 				o.depends('encryption', 'sae-mixed');
+@@ -1864,6 +2039,7 @@
+ 				o = ss.taboption('encryption', form.ListValue, '_wep_key', _('Used Key Slot'));
+ 				o.depends('encryption', 'wep-open');
+ 				o.depends('encryption', 'wep-shared');
++				o.depends('encryption', 'wep-mixed');
+ 				o.value('1', _('Key #%d').format(1));
+ 				o.value('2', _('Key #%d').format(2));
+ 				o.value('3', _('Key #%d').format(3));
+@@ -1882,6 +2058,7 @@
+ 					o = ss.taboption('encryption', form.Value, 'key%d'.format(slot), _('Key #%d').format(slot));
+ 					o.depends('encryption', 'wep-open');
+ 					o.depends('encryption', 'wep-shared');
++					o.depends('encryption', 'wep-mixed');
+ 					o.datatype = 'wepkey';
+ 					o.rmempty = true;
+ 					o.password = true;
+@@ -2211,6 +2388,22 @@
+ 						}
+ 					}
+ 				}
++				else if (hwtype == 'rtl8192cd') {
++					// RX23302: 802.11w (protected management frames) is done by the
++					// authenticator of rtl8192cd (8192cd_psk.c), WPA2-PSK only.
++					o = ss.taboption('encryption', form.ListValue, 'ieee80211w', _('802.11w Management Frame Protection'));
++					o.value('0', _('Disabled'));
++					o.value('1', _('Optional'));
++					o.value('2', _('Required'));
++					o.depends({ mode: 'ap', encryption: 'psk2' });
++					o.default = '0';
++					o.write = function(section_id, value) {
++						if (value != this.default)
++							return form.ListValue.prototype.write.call(this, section_id, value);
++						else
++							return form.ListValue.prototype.remove.call(this, section_id);
++					};
++				}
+ 			});
+ 		};
+ 
+@@ -2305,7 +2498,9 @@
+ 						E('span', { 'style': s }, `${res?.mode}`),
+ 						E('span', { 'style': s }, `${res?.bssid}`),
+ 						E('span', { 'style': s }, `${network.formatWifiEncryption(res?.encryption)}`),
+-						E('div', { 'class': 'right' }, E('button', {
++						// RX23302: rtl8192cd has no client mode (rtl8192cd.sh sets up
++						// access points only), joining would create a dead section.
++						E('div', { 'class': 'right' }, (radioDev.get('type') == 'rtl8192cd') ? '' : E('button', {
+ 							'class': 'cbi-button cbi-button-action important',
+ 							'click': ui.createHandlerFn(this, 'handleJoin', radioDev, res)
+ 						}, _('Join Network')))

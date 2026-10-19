@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Вендорский драйвер Realtek rtl8192fe 3.8.0 для ELECTRA RX23302:
+# RTL8197G (встроенное радио 2.4 ГГц) + RTL8812FE (5 ГГц на PCIe0).
+# Собирается встроенным, конфиг самого драйвера - rx23302.mk.
+#
+# Вендорский Kconfig рядом (1451 строка) НЕ подключаем: его символы
+# (RTL8192CD, WLAN_HAL...) рассчитаны на сборку вне ядра (backports), под
+# встроенную сборку они не годятся.
+#
+# Этот символ нужен ради того, что драйвер тянет из ядра:
+#   WIRELESS_EXT + WEXT_PRIV - Wireless Extensions. Через них libiwinfo (бэкенд
+#   wext) и, значит, LuCI читают канал, мощность, сигнал и клиентов. cfg80211 у
+#   драйвера нет (свой стек 802.11), nl80211-пути нет.
+#   Так же у sowarden/hh71vm-openwrt (RTL8197FS + RTL8812FE) и в openwrt-AC10
+#   (Tenda AC10, RTL8197F): RTL_COMAPI_WLTOOLS + select WEXT_PRIV.
+config RTL8192FE_RX23302
+	bool "Realtek rtl8192fe (RTL8197G + RTL8812FE) для RX23302"
+	depends on MIPS
+	default y
+	select WIRELESS_EXT
+	select WEXT_PRIV
+	help
+	  Вендорский драйвер радио 2.4 и 5 ГГц для ELECTRA RX23302.
+	  Включает Wireless Extensions для iwinfo/LuCI.
