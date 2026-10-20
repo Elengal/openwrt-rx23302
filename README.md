@@ -2,7 +2,8 @@
 
 [Русский](#русский) · [English](#english)
 
-> Первый релиз — **0.1.0**: готовый образ в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Текущий релиз — **0.1.1**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Новое в 0.1.1: обновление прошивки из LuCI (sysupgrade) и проверенный возврат на заводскую прошивку.
 
 ---
 
@@ -40,14 +41,13 @@ OpenWrt не поддерживается.
 | ✅ Коммутатор в LuCI | драйвер OpenWrt `rtl8367b` (swconfig) вместо закрытого SDK Realtek: вкладка «Сеть → Коммутатор», VLAN, состояние портов |
 | ✅ Программное ускорение NAT | flow offloading включён по умолчанию |
 | ✅ LuCI на русском | |
+| ✅ Обновление из LuCI / sysupgrade | `…-squashfs-sysupgrade.bin`, с сохранением настроек и без; оборванное обновление — не кирпич (см. ниже) |
+| ✅ Возврат на заводскую прошивку | одной командой, без UART — [docs/recovery.md](docs/recovery.md) |
 | ⚠️ Режим точки доступа | работает, настраивается вручную |
 
 ### Что не работает или не проверено
 
-- **sysupgrade** (обновление из LuCI) — не проверен. Пока — только UART.
 - **Аппаратный NAT** RTL8197F — не перенесён.
-- **Возврат на заводскую прошивку** — процедура не проверена на железе (сама заводская прошивка
-  во флеше не затирается).
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
 - **Двойники** — Transservice **TS-7322** (Ростелеком), Transservice **TS-7022** (МТС), **Билайн RX-22302** —
@@ -68,8 +68,21 @@ ls /sys/kernel/debug/switch/           # окно регистров: reg/val, p
 
 ### Установка
 
-Только через UART: [docs/install-uart.md](docs/install-uart.md).
-Если что-то пошло не так: [docs/recovery.md](docs/recovery.md).
+**Первая установка** — только через UART: [docs/install-uart.md](docs/install-uart.md)
+(файл `…-squashfs-full.bin`). Заводской веб-интерфейс Ростелекома чужие образы не принимает.
+
+**Обновление** уже установленной OpenWrt — без UART: LuCI → «Система» → «Резервная копия / Прошивка»
+→ «Установить новый образ прошивки», файл **`…-squashfs-sysupgrade.bin`**. Или из консоли:
+
+```sh
+sysupgrade /tmp/openwrt-…-squashfs-sysupgrade.bin      # с сохранением настроек
+sysupgrade -n /tmp/openwrt-…-squashfs-sysupgrade.bin   # начисто
+```
+
+Обновление занимает ~3 мин. Порядок записи такой, что при обрыве (выключили свет) загрузчик
+поднимет заводскую прошивку из второго банка — не кирпич; OpenWrt потом ставится заново по UART.
+
+**Вернуть заводскую прошивку:** `mtd erase kernel && reboot` — подробно в [docs/recovery.md](docs/recovery.md).
 
 ### Сборка
 
@@ -120,8 +133,11 @@ verified with tcpdump), software flow offloading, LuCI. The switch runs on OpenW
 `swconfig dev switch0 show`, register window in `/sys/kernel/debug/switch/`. Ports: 0 = WAN,
 3 = LAN1, 4 = LAN2, 7 = CPU.
 
-**Not yet:** sysupgrade (untested — UART only), RTL8197F hardware NAT, verified return to stock
-(the stock image in flash is not overwritten), noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+**New in 0.1.1:** sysupgrade / LuCI firmware upgrade (`…-squashfs-sysupgrade.bin`, with or without
+keeping settings; an interrupted upgrade falls back to stock firmware, not a brick) and a verified
+return to stock: `mtd erase kernel && reboot` ([docs/recovery.md](docs/recovery.md)).
+
+**Not yet:** RTL8197F hardware NAT, noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
 
 **Look-alikes** — Transservice **TS-7322** (Rostelecom), Transservice **TS-7022** (MTS), **Beeline RX-22302** —
 reportedly the same hardware, but **untested**. Compare the first UART boot line first (ours:
@@ -129,7 +145,8 @@ reportedly the same hardware, but **untested**. Compare the first UART boot line
 stock image in the second slot are not overwritten. Tried it? Please report in
 [Issues](https://github.com/Elengal/openwrt-rx23302/issues).
 
-**Install:** UART only — [docs/install-uart.md](docs/install-uart.md).
+**Install:** first install over UART only (`…-squashfs-full.bin`) — [docs/install-uart.md](docs/install-uart.md).
+**Upgrade:** LuCI → System → Backup / Flash firmware, or `sysupgrade`, with `…-squashfs-sysupgrade.bin`.
 **Recovery:** [docs/recovery.md](docs/recovery.md).
 **Build:** `./build.sh` (Linux, ~15 GB, OpenWrt build prerequisites).
 **Sources and licenses:** [docs/sources.md](docs/sources.md).

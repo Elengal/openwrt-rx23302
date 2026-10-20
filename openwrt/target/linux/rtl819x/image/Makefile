@@ -99,7 +99,9 @@ define Device/Default
   # нужно ядро на 0x30000, а корневая система лежит отдельно на 0x300000.
   # Ими же удобно обновляться по сети из уже работающей системы (mtd write).
   IMAGES := sysupgrade.bin kernel.bin rootfs.bin full.bin
-  IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+  # sysupgrade.bin = full.bin + метаданные fwtool (имя платы для проверки).
+  # Пишет его base-files/lib/upgrade/platform.sh: rootfs, затем ядро.
+  IMAGE/sysupgrade.bin := rx23302-full | append-metadata
   IMAGE/kernel.bin := append-kernel
   IMAGE/rootfs.bin := append-rootfs | rootfs-chksum
   # full.bin (RX23302) - ОДИН файл под флеш с адреса 0x30000:

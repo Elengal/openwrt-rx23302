@@ -8,8 +8,9 @@
   Ревизия **RX-23302R** и другие модели не проверялись. Проверка до прошивки: в самом начале
   лога загрузки по UART (шаг 1) у проверенного устройства — `Realtek RTL8197F-VG boot code …`.
   Другая строка — не прошивайте.
-- Прошивка ставится **только через UART и загрузчик Realtek**. Заводской веб-интерфейс
-  Ростелекома чужие образы не принимает, sysupgrade из нашей прошивки пока не проверен.
+- **Первая** установка — **только через UART и загрузчик Realtek**: заводской веб-интерфейс
+  Ростелекома чужие образы не принимает. Дальнейшие обновления — уже из LuCI, без UART
+  (файл `…-squashfs-sysupgrade.bin`, см. README).
 - Нужен разбор корпуса и USB-UART адаптер **3,3 В**. Адаптер на 5 В может сжечь SoC.
 - Вы делаете это на свой риск. Гарантия на устройство пропадёт.
 - Заводская прошивка во **втором слоте флеша (0x800000) не затирается** — путь назад есть,
@@ -125,7 +126,8 @@ sync; reboot
 
 **Read first.** For **Rotek RX-23302 with RTL8197FH-VG only** (stock firmware `ELECTRA-RX23302`); the RX-23302R revision is untested. Before flashing, the UART boot log must start with `Realtek RTL8197F-VG boot code …`. Installation is **only via UART and the Realtek bootloader**. You need to open
 the case and use a **3.3 V** USB-UART adapter. The stock firmware in the **second flash slot
-(0x800000) is not overwritten**, see [recovery.md](recovery.md). At your own risk.
+(0x800000) is not overwritten**, see [recovery.md](recovery.md). At your own risk. Only the first
+install needs UART; later upgrades go through LuCI / `sysupgrade` with `…-squashfs-sysupgrade.bin`.
 
 **Serial:** 38400 8N1, no flow control. Remove the cover: the UART is the **4-pin header**
 on the board, each pin is labelled on the PCB. No soldering, Dupont wires
