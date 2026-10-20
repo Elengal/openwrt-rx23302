@@ -1,4 +1,4 @@
-# OpenWrt для ELECTRA RX23302
+# OpenWrt для Ротек (Rotek) RX-23302 / ELECTRA RX23302
 
 [Русский](#русский) · [English](#english)
 
@@ -8,9 +8,15 @@
 
 ## Русский
 
-Своя прошивка OpenWrt (ядро Linux 6.18) для роутера **ELECTRA RX23302**, который раздаёт
-Ростелеком. Своя — потому что такого порта нигде нет: SoC Realtek RTL8197F в официальном
+Своя прошивка OpenWrt (ядро Linux 6.18) для роутера **Ротек RX-23302** (Rotek RX-23302),
+который раздаёт Ростелеком. Заводская прошивка называет его **ELECTRA-RX23302** — это одно и то же
+устройство. Своя — потому что такого порта нигде нет: SoC Realtek RTL8197F в официальном
 OpenWrt не поддерживается.
+
+> ⚠️ **Проверено только на RX-23302 с SoC RTL8197FH-VG** (заводская прошивка
+> `ELECTRA-RX23302 V1.24.137`). Ревизия **RX-23302R** (по сообщениям — RTL8197FN) и другие
+> модели Ротек **не проверялись**: прошивка может не загрузиться. Проверка до прошивки: лог загрузки
+> по UART начинается с `Realtek RTL8197F-VG boot code`. Другая ревизия — на свой риск.
 
 ### Железо
 
@@ -90,8 +96,14 @@ GPL-2.0 для кода этого проекта; у компонентов —
 
 ## English
 
-OpenWrt (Linux 6.18) for the **ELECTRA RX23302** router (distributed by Rostelecom, Russia).
-The Realtek RTL8197F SoC is not supported by upstream OpenWrt; this is a standalone port.
+OpenWrt (Linux 6.18) for the **Rotek RX-23302** router (a.k.a. **ELECTRA RX23302** in the stock
+firmware; distributed by Rostelecom, Russia). The Realtek RTL8197F SoC is not supported by
+upstream OpenWrt; this is a standalone port.
+
+> ⚠️ **Tested only on RX-23302 with the RTL8197FH-VG SoC** (stock firmware
+> `ELECTRA-RX23302 V1.24.137`). The **RX-23302R** revision (reportedly RTL8197FN) and other Rotek
+> models are **untested** and may not boot. The UART boot log must start with
+> `Realtek RTL8197F-VG boot code`.
 
 **Hardware:** RTL8197FH-VG (MIPS 24Kc, 1 GHz), 64 MB RAM, 16 MB SPI NOR, 2.4 GHz RTL8197G
 2×2 n, 5 GHz RTL8812FE 2×2 ac, RTL8367D switch (1 WAN + 2 LAN, gigabit), UART 38400 8N1.

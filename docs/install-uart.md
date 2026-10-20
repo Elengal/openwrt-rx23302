@@ -4,6 +4,10 @@
 
 ## ⚠️ Прочитайте до начала
 
+- Только для **Ротек RX-23302 с SoC RTL8197FH-VG** (заводская прошивка `ELECTRA-RX23302`).
+  Ревизия **RX-23302R** и другие модели не проверялись. Проверка до прошивки: в самом начале
+  лога загрузки по UART (шаг 1) у проверенного устройства — `Realtek RTL8197F-VG boot code …`.
+  Другая строка — не прошивайте.
 - Прошивка ставится **только через UART и загрузчик Realtek**. Заводской веб-интерфейс
   Ростелекома чужие образы не принимает, sysupgrade из нашей прошивки пока не проверен.
 - Нужен разбор корпуса и USB-UART адаптер **3,3 В**. Адаптер на 5 В может сжечь SoC.
@@ -119,7 +123,7 @@ sync; reboot
 
 ## English
 
-**Read first.** Installation is **only via UART and the Realtek bootloader**. You need to open
+**Read first.** For **Rotek RX-23302 with RTL8197FH-VG only** (stock firmware `ELECTRA-RX23302`); the RX-23302R revision is untested. Before flashing, the UART boot log must start with `Realtek RTL8197F-VG boot code …`. Installation is **only via UART and the Realtek bootloader**. You need to open
 the case and use a **3.3 V** USB-UART adapter. The stock firmware in the **second flash slot
 (0x800000) is not overwritten**, see [recovery.md](recovery.md). At your own risk.
 
