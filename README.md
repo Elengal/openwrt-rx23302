@@ -50,6 +50,11 @@ OpenWrt не поддерживается.
   во флеше не затирается).
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
+- **Двойники** — Transservice **TS-7322** (Ростелеком), Transservice **TS-7022** (МТС), **Билайн RX-22302** —
+  по описаниям то же железо, но **не проверялись**. Сначала сравните первую строку лога загрузки по UART
+  (у нас `Realtek RTL8197F-VG boot code`). Могут отличаться настройка платы, гнёзда свитча и Wi-Fi.
+  Загрузчик и заводская прошивка во втором слоте при этом не затираются. Пробовали — расскажите в
+  [Issues](https://github.com/Elengal/openwrt-rx23302/issues).
 
 ### Коммутатор: для любопытных
 
@@ -117,6 +122,12 @@ verified with tcpdump), software flow offloading, LuCI. The switch runs on OpenW
 
 **Not yet:** sysupgrade (untested — UART only), RTL8197F hardware NAT, verified return to stock
 (the stock image in flash is not overwritten), noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+
+**Look-alikes** — Transservice **TS-7322** (Rostelecom), Transservice **TS-7022** (MTS), **Beeline RX-22302** —
+reportedly the same hardware, but **untested**. Compare the first UART boot line first (ours:
+`Realtek RTL8197F-VG boot code`); board setup, switch ports and Wi-Fi may differ. The bootloader and the
+stock image in the second slot are not overwritten. Tried it? Please report in
+[Issues](https://github.com/Elengal/openwrt-rx23302/issues).
 
 **Install:** UART only — [docs/install-uart.md](docs/install-uart.md).
 **Recovery:** [docs/recovery.md](docs/recovery.md).
