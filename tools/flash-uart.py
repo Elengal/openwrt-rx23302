@@ -52,6 +52,7 @@ RAM_IMG = 0x80A00000      # куда XMODEM кладёт образ / where XMOD
 RAM_COPY = 0x81400000     # куда читаем флеш для сверки / flash read-back buffer
 FLASH_OFF = 0x30000       # начало ядра во флеше / kernel start in flash
 KERNEL_LEN = 0x2D0000     # раздел kernel (mtd1); дальше — rootfs (mtd2)
+ROOTFS_LEN = 0x300000     # раздел rootfs (mtd2), до rootfs_data на 0x600000
 
 
 def log(msg):
@@ -225,8 +226,17 @@ def main():
     img = open(args[0], "rb").read()
     dev = args[1] if len(args) > 1 else "/dev/ttyUSB0"
     n = len(img)
-    if n <= KERNEL_LEN or n > 0x7A0000 - FLASH_OFF:
+    # Те же проверки, что в sysupgrade (base-files/lib/upgrade/platform.sh):
+    # чужой файл зальётся за 40 минут и затрёт ядро и настройки.
+    # Same checks as sysupgrade: a wrong file would take 40 min to flash.
+    if n <= KERNEL_LEN or n > KERNEL_LEN + ROOTFS_LEN:
         sys.exit(f"странный размер образа {n} Б — это точно full.bin? / unexpected image size")
+    if img[:4] != b"KE32":
+        sys.exit(f"нет заголовка ядра KE32 ({img[:4]!r}) — нужен full.bin / not a full.bin")
+    if img[8:12] != FLASH_OFF.to_bytes(4, "big"):
+        sys.exit(f"адрес записи ядра {img[8:12].hex()} не 00030000 — не тот образ / wrong image")
+    if img[KERNEL_LEN:KERNEL_LEN + 4] not in (b"hsqs", b"sqsh"):
+        sys.exit("нет squashfs на 0x2d0000 — это не full.bin / no squashfs at 0x2d0000")
     log(f"образ {args[0]}: {n} Б (0x{n:X}), последние байты {img[-2:].hex(' ')}")
 
     bl = Bootloader(dev)
