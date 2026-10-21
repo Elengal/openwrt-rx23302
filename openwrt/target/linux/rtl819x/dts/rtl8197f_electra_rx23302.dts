@@ -47,6 +47,35 @@
 	status = "okay";
 };
 
+/*
+ * Кнопка Reset - линия 54 (порт G пин 6, gpio1 бит 22), нажата = 0.
+ * Reset button - line 54 (port G pin 6, gpio1 bit 22), active low.
+ *
+ * Проверено на железе 21.10.2026: при нажатии меняется только этот бит
+ * (0xB8003528, 05C00001 -> 05800001). Тот же вывод читает загрузчик:
+ * Reset, зажатый при включении питания, открывает аварийный TFTP
+ * (192.168.1.6), см. docs/install-tftp.md.
+ * Verified on hardware: only this bit changes when pressed. The
+ * bootloader reads the same pin: hold Reset at power-on to get its
+ * TFTP recovery (192.168.1.6), see docs/install-tftp.md.
+ *
+ * Опрос, а не прерывание: прерывания этого GPIO-контроллера не проверены.
+ * Polled, not interrupt-driven: GPIO IRQs of this controller are untested.
+ */
+/ {
+	keys {
+		compatible = "gpio-keys-polled";
+		poll-interval = <20>;
+
+		reset {
+			label = "reset";
+			gpios = <&gpio1 22 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <60>;
+		};
+	};
+};
+
 &ethernet {
 	status = "okay";
 
@@ -84,6 +113,13 @@
  * (0x121a = 0x0239, 4 байта, ловушка - порт 7). Порядок важен.
  * Те же записи и в том же порядке делала прошивка v6.7 (149 штук,
  * повторы оставлены как были).
+ *
+ * Исключение - 0x1b03 (LED_CONFIGURATION, общий для всех портов):
+ * у загрузчика 0x0936, с ним лампы WAN/LAN не горят. 0x0222 - линк и
+ * мигание при передаче; проверено глазами на WAN, LAN1, LAN2 21.10.2026.
+ * Каким портам выведены лампы - 0x1b24/0x1b25 (маска 0x1f = порты 0-4).
+ * Exception: 0x1b03 (LED mode, all ports) is 0x0222 = link/activity;
+ * the bootloader value 0x0936 leaves the port LEDs dark.
  */
 / {
 	switch0: switch {
@@ -125,7 +161,7 @@
 			0x08a5 0x00ff 0x08a6 0x00ff 0x08a7 0x00ff 0x08a8 0x00ff
 			0x08a9 0x00ff 0x08a2 0x008f 0x08a6 0x0090 0x0918 0x0000
 			0x091d 0x0000 0x1119 0x000b 0x1200 0x1fc6 0x121e 0x0794
-			0x12d7 0x0076 0x12f6 0x2e2c 0x1b03 0x0936 0x1d1a 0x0100
+			0x12d7 0x0076 0x12f6 0x2e2c 0x1b03 0x0222 0x1d1a 0x0100
 			0x1d1b 0xdd60 0x1d70 0x2000 0x1dad 0x97f3 0x1233 0x06a4
 			0x1234 0x00c8 0x1237 0x0140 0x1238 0x00f0 0x1239 0x0108
 			0x123a 0x0060 0x12af 0x0000 0x12c7 0x0076 0x08a2 0x00ff
@@ -243,11 +279,10 @@
  *    В mainline есть DSA-драйвер rtl8365mb (compatible "realtek,rtl8365mb"),
  *    в его bindings RTL8367RB-VB присутствует.
  *
- * 2. GPIO кнопок. Из /bin/led_test.sh известны светодиоды:
- *      LAN_LEDS="54 55 56 57", плюс 58 (статус) и 11 (USB).
- *    Экспортированы в системе: 25, 31, 35, 54, 58 — значит кнопки
- *    среди 25/31/35, но какая именно reset, пока не проверено.
- *    ВНИМАНИЕ: раскладку с Humax E3 (reset=54) брать нельзя — у нас 54 занят LED.
+ * 2. Светодиоды. В /bin/led_test.sh стока: LAN_LEDS="54 55 56 57",
+ *    58 (статус), 11 (USB). Этот скрипт НЕ про нашу плату: 54 - кнопка
+ *    Reset (проверено нажатием 21.10.2026, узел keys выше), 55/56 - SMI
+ *    свитча, 58 - его сброс. Где светодиоды на самом деле - не проверено.
  *
  * 3. WiFi-узлы — появятся, когда заведём rtl8192cd с halmac_8197f.
  * ─────────────────────────────────────────────────────────────────

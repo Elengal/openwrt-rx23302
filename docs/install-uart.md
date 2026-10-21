@@ -8,7 +8,8 @@
   Ревизия **RX-23302R** и другие модели не проверялись. Проверка до прошивки: в самом начале
   лога загрузки по UART (шаг 1) у проверенного устройства — `Realtek RTL8197F-VG boot code …`.
   Другая строка — не прошивайте.
-- **Первая** установка — **только через UART и загрузчик Realtek**
+- **Проще без UART:** с 0.1.2 OpenWrt ставится кнопкой Reset и TFTP, без разборки —
+  [install-tftp.md](install-tftp.md). UART — запасной путь и для тех, кто хочет видеть лог
   (установка через заводской веб-интерфейс Ростелекома не проверялась). Дальнейшие обновления — уже из LuCI, без UART
   (файл `…-squashfs-sysupgrade.bin`, см. README).
 - Нужен разбор корпуса и USB-UART адаптер **3,3 В**. Адаптер на 5 В может сжечь SoC.
@@ -124,7 +125,8 @@ sync; reboot
 
 ## English
 
-**Read first.** For **Rotek RX-23302 with RTL8197FH-VG only** (stock firmware `ELECTRA-RX23302`); the RX-23302R revision is untested. Before flashing, the UART boot log must start with `Realtek RTL8197F-VG boot code …`. Installation is **only via UART and the Realtek bootloader**. You need to open
+**Read first.** For **Rotek RX-23302 with RTL8197FH-VG only** (stock firmware `ELECTRA-RX23302`); the RX-23302R revision is untested. Before flashing, the UART boot log must start with `Realtek RTL8197F-VG boot code …`. Since 0.1.2 the easier way is Reset + TFTP without opening the case ([install-tftp.md](install-tftp.md));
+UART is the fallback. For UART you need to open
 the case and use a **3.3 V** USB-UART adapter. The stock firmware in the **second flash slot
 (0x800000) is not overwritten**, see [recovery.md](recovery.md). At your own risk. Only the first
 install needs UART; later upgrades go through LuCI / `sysupgrade` with `…-squashfs-sysupgrade.bin`.

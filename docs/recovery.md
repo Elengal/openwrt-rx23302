@@ -56,18 +56,22 @@ mtd erase kernel && reboot
 
 ## Если OpenWrt не загружается
 
-1. Подключите UART (38400 8N1), включите роутер, жмите Esc до приглашения `<RealTek>`.
-2. Прошейте образ заново: `tools/flash-uart.py` (он сам ловит загрузчик).
+**Без разборки:** выключите роутер, зажмите Reset, включите питание, держите ~10 с — загрузчик
+поднимет аварийный TFTP на 192.168.1.6. Передайте `…-squashfs-tftp-factory.bin` —
+[install-tftp.md](install-tftp.md). Так же OpenWrt ставится заново после возврата на сток.
 
-Если загрузчик сам поднял заводскую прошивку (см. лог выше) — OpenWrt ставится заново
-так же, через UART: [install-uart.md](install-uart.md). Это проверено: сток → OpenWrt.
+**Через UART** (если TFTP не помог):
+1. Подключите UART (38400 8N1), включите роутер, жмите Esc до приглашения `<RealTek>`.
+2. Прошейте образ заново: `tools/flash-uart.py` (он сам ловит загрузчик) — [install-uart.md](install-uart.md).
+
+Сток → OpenWrt проверено обоими способами.
 
 Загрузчик живёт в отдельной области и прошивкой не затирается: пока он печатает
 `<RealTek>`, устройство восстанавливается.
 
 ## Правила загрузчика
 
-- Команды только **с полными аргументами**. `FLR` без аргументов вешает загрузчик до сброса питания.
+- Команды только **с полными аргументами**. `FLR` и `AUTOBURN` без аргументов вешают загрузчик до сброса питания.
 - На вопрос `(Y)es, (N)o` — **`Y` и Enter**. Без Enter загрузчик молча ждёт бесконечно (выглядит как зависание).
 - Пока `FLW`/`FLR` печатают точки — ничего не отправлять.
 - Слово `<RealTek>` в выводе ещё не значит «готово» — ждите `Successed` или тишину.
@@ -93,8 +97,9 @@ mtd erase kernel && reboot
 The bootloader restores the stock firmware from bank 2 (~1–2 min) and boots it. No UART needed.
 After the restore bank 1 matched the original stock flash dump byte for byte.
 
-**OpenWrt does not boot:** connect UART, press Esc during power-on until `<RealTek>`, re-flash
-with `tools/flash-uart.py`. Going stock → OpenWrt again is the normal UART install
-([install-uart.md](install-uart.md)), also verified.
+**OpenWrt does not boot:** hold Reset while powering on (~10 s) and send
+`…-squashfs-tftp-factory.bin` to 192.168.1.6 over TFTP ([install-tftp.md](install-tftp.md)); no case
+opening needed. Fallback: UART, Esc until `<RealTek>`, `tools/flash-uart.py`
+([install-uart.md](install-uart.md)). Stock → OpenWrt is verified both ways.
 
 Never send bootloader commands without arguments; answer `(Y)es, (N)o` with `Y` **and** Enter.

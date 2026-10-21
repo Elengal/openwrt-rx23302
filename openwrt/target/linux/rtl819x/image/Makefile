@@ -71,6 +71,14 @@ define Build/rx23302-full
 	$(TOPDIR)/scripts/rx23302-full-image.py $(IMAGE_KERNEL) $(IMAGE_ROOTFS) $@
 endef
 
+# tftp-factory.bin: тот же full.bin, разложенный на блоки KE32 + RE32 для
+# аварийного TFTP заводского загрузчика (Reset при включении, 192.168.1.6).
+define Build/rx23302-tftp
+	$(TOPDIR)/scripts/rx23302-full-image.py $(IMAGE_KERNEL) $(IMAGE_ROOTFS) $@.full
+	$(TOPDIR)/scripts/rx23302-tftp-image.py $@.full $@
+	rm -f $@.full
+endef
+
 define Build/append-fake-rootfs
 	$(call Build/cvimg, \
 		-a $(BLOCKSIZE) \
@@ -98,7 +106,7 @@ define Device/Default
   # kernel.bin и rootfs.bin — раздельные образы под разделы флеша: загрузчику
   # нужно ядро на 0x30000, а корневая система лежит отдельно на 0x300000.
   # Ими же удобно обновляться по сети из уже работающей системы (mtd write).
-  IMAGES := sysupgrade.bin kernel.bin rootfs.bin full.bin
+  IMAGES := sysupgrade.bin kernel.bin rootfs.bin full.bin tftp-factory.bin
   # sysupgrade.bin = full.bin + метаданные fwtool (имя платы для проверки).
   # Пишет его base-files/lib/upgrade/platform.sh: rootfs, затем ядро.
   IMAGE/sysupgrade.bin := rx23302-full | append-metadata
@@ -111,6 +119,9 @@ define Device/Default
   # сразу за ядром (0x25aa82), а загрузчик ждёт его на 0x300000 - так не
   # загрузится. Размер упирается в kernel+rootfs = 0x2d0000 + 0x300000.
   IMAGE/full.bin := rx23302-full
+  # tftp-factory.bin - для установки без UART: Reset при включении питания,
+  # затем `tftp -p` на 192.168.1.6 (docs/install-tftp.md).
+  IMAGE/tftp-factory.bin := rx23302-tftp
 endef
 
 include $(SUBTARGET).mk

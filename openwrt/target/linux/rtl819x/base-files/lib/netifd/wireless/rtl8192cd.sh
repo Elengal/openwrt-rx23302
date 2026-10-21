@@ -344,6 +344,9 @@ rtl_setup_vif() {
 	# в режиме точки зовёт init_beacon() (8192cd_ioctl.c:4175), а у опущенного VAP маяк ещё не
 	# собран - Oops в init_beacon/update_tim и перезагрузка роутера (поймано на стенде
 	# 06.10.2026, UART-лог scratch-06-10/uart-v4-06-10.log).
+	# led_type=7 (LEDTYPE_SW_ENABLETXRXDATA: горит при включённом радио, мигает от
+	# трафика) - так записано в заводском hw-разделе 0x20000 (H601, байт 0xa7). Без него
+	# драйвер берёт 0 и лампы 2.4G/5G не трогает. Проверено 21.10.2026: лампа горит.
 	if [ "$vif_idx" = 0 ]; then
 		rtl_apply_mib "$ifname" \
 			"countrystr=$country_str" \
@@ -365,6 +368,7 @@ rtl_setup_vif() {
 			"fragthres=$fragthres" \
 			"ack_timeout=$acktimeout" \
 			"MIMO_TR_mode=2" \
+			"led_type=7" \
 			"powerpercent=$powerpct" \
 			"ampdu=$ampdu" || { rtl_vif_fail MIB_WRITE_FAILED; return 1; }
 	fi

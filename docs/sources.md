@@ -32,7 +32,7 @@ This is an engineering provenance review, not legal advice.
 | Упаковщик образа `cvimg` (KE32) | `tools/cvimg/` | Weijie Gao, по мотивам утилиты Realtek | GPL-2.0 |
 | Ethernet-контроллер 8197F | `files-6.18/drivers/net/ethernet/rtl819x_eth.*` | **написан в этом проекте**, значения регистров сверены с Realtek SDK (`rtl819x_swNic.c`, GPL) | GPL-2.0-only |
 | Device tree RX23302 | `dts/rtl8197f_electra_rx23302.dts` | **этот проект**, по живому устройству | GPL-2.0 |
-| Скрипты образа | `scripts/rx23302-full-image.py`, `scripts/rtl819x-rootfs-chksum.py` | **этот проект** | GPL-2.0-only |
+| Скрипты образа | `scripts/rx23302-full-image.py`, `scripts/rx23302-tftp-image.py`, `scripts/rtl819x-rootfs-chksum.py` | **этот проект**; формат TFTP-образа — по разбору заводского загрузчика | GPL-2.0-only |
 | base-files (netifd/wifi-скрипты, 02_network, uci-defaults); утилита `rtlmib` — пакет из исходника | `base-files/`, `package/utils/rtlmib/` | **этот проект**; `rtl8192cd.sh` по мотивам [sowarden/hh71vm-openwrt](https://github.com/sowarden/hh71vm-openwrt) (`8881e78`) | GPL-2.0 |
 
 ### Коммутатор RTL8367D (`files-6.18/drivers/net/phy/`)
