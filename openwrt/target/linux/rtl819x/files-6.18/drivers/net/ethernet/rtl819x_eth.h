@@ -174,6 +174,16 @@ struct rtl819x_tx_desc {
 #define RTL819X_RX_CRC_ERR		BIT(4)
 #define RTL819X_RX_FAE			BIT(5)	/* ошибка выравнивания кадра */
 
+/*
+ * Проверка контрольных сумм на приёме: что железо узнало в кадре и сошлись
+ * ли суммы. Раскладка - у донора iptime A2004MU (rtl8197f_eth.c, RD_IPV4,
+ * RD_L3CS_OK), там проверена на железе.
+ */
+#define RTL819X_RX_IPV4			BIT(8)	/* opts4: кадр IPv4 */
+#define RTL819X_RX_IPV6			BIT(9)	/* opts4: кадр IPv6 */
+#define RTL819X_RX_L3CS_OK		BIT(31)	/* opts5: сумма заголовка IP верна */
+#define RTL819X_RX_L4CS_OK		BIT(30)	/* opts5: сумма TCP/UDP верна */
+
 /* ---- передающий дескриптор ------------------------------------------
  *
  * ВНИМАНИЕ: раскладка НЕ совпадает с приёмным. Общие только own (бит 0)
