@@ -154,6 +154,29 @@ extern int rtl_crossband_get_dev_status(struct net_device *dev, struct crossband
 #define os_malloc(size, flag)	kmalloc(size, flag)
 #endif
 
+/*
+ * RX23302: kmalloc() больше 8 КБ берёт у buddy блок 2^n страниц: rtl8192cd_hw (844 КБ)
+ * занимает 1 МБ, wlanllc_hdr_poll (360 КБ) - 512 КБ. alloc_pages_exact() сразу возвращает
+ * хвост блока. Память та же - непрерывная, lowmem, выровнена на страницу, так что
+ * virt_to_phys() и DMA работают как с kmalloc(). Освобождать только rtl_free_exact()
+ * с тем же размером.
+ */
+#ifdef __KERNEL__
+static inline void *rtl_alloc_exact(size_t size, gfp_t gfp)
+{
+	return alloc_pages_exact(size, gfp);
+}
+
+static inline void rtl_free_exact(void *p, size_t size)
+{
+	if (p)
+		free_pages_exact(p, size);
+}
+#else
+#define rtl_alloc_exact(size, gfp)	kmalloc(size, gfp)
+#define rtl_free_exact(p, size)		kfree(p)
+#endif
+
 #if defined(STA_CONTROL) && STA_CONTROL_ALGO == STA_CONTROL_ALGO3	//20170103
 u32 if_priv_stactrl[NUM_WLAN_IFACE];
 #endif
@@ -15336,7 +15359,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 			printk("****** %s %d, allocated addr %p\n", __FUNCTION__, __LINE__, &dma_virt);
 		}
 #else
-		phw = (struct rtl8192cd_hw *)kmalloc((sizeof(struct rtl8192cd_hw)), GFP_ATOMIC);
+		phw = (struct rtl8192cd_hw *)rtl_alloc_exact(sizeof(struct rtl8192cd_hw), GFP_ATOMIC);
 		if (!phw) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for rtl8192cd_hw (size %d)\n", sizeof(struct rtl8192cd_hw));
@@ -15358,7 +15381,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 		pshare = &shared_info;
 #endif
 #else
-		pshare = (struct priv_shared_info *)kmalloc(sizeof(struct priv_shared_info), GFP_ATOMIC);
+		pshare = (struct priv_shared_info *)rtl_alloc_exact(sizeof(struct priv_shared_info), GFP_ATOMIC);
 		if (!pshare) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for priv_shared_info (size %d)\n", sizeof(struct priv_shared_info));
@@ -15375,7 +15398,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 #endif
 #else
 		pwlan_hdr_poll = (struct wlan_hdr_poll *)
-						kmalloc((sizeof(struct wlan_hdr_poll)), GFP_ATOMIC);
+						rtl_alloc_exact(sizeof(struct wlan_hdr_poll), GFP_ATOMIC);
 		if (!pwlan_hdr_poll) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for wlan_hdr_poll (size %d)\n", sizeof(struct wlan_hdr_poll));
@@ -15391,7 +15414,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 #endif
 #else
 		pwlanllc_hdr_poll = (struct wlanllc_hdr_poll *)
-						kmalloc((sizeof(struct wlanllc_hdr_poll)), GFP_ATOMIC);
+						rtl_alloc_exact(sizeof(struct wlanllc_hdr_poll), GFP_ATOMIC);
 		if (!pwlanllc_hdr_poll) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for wlanllc_hdr_poll (size %d)\n", sizeof(struct wlanllc_hdr_poll));
@@ -15407,7 +15430,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 #endif
 #else
 		pwlanbuf_poll = (struct	wlanbuf_poll *)
-						kmalloc((sizeof(struct	wlanbuf_poll)), GFP_ATOMIC);
+						rtl_alloc_exact(sizeof(struct wlanbuf_poll), GFP_ATOMIC);
 		if (!pwlanbuf_poll) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for wlanbuf_poll (size %d)\n", sizeof(struct wlanbuf_poll));
@@ -15423,7 +15446,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 #endif
 #else
 		pwlanicv_poll = (struct	wlanicv_poll *)
-						kmalloc((sizeof(struct	wlanicv_poll)), GFP_ATOMIC);
+						rtl_alloc_exact(sizeof(struct wlanicv_poll), GFP_ATOMIC);
 		if (!pwlanicv_poll) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for wlanicv_poll (size %d)\n", sizeof(struct wlanicv_poll));
@@ -15440,7 +15463,7 @@ void *rtl8192cd_init_one(struct sdio_func *psdio_func, void *ent, struct _device
 #endif
 #else
 		pwlanmic_poll = (struct	wlanmic_poll *)
-						kmalloc((sizeof(struct	wlanmic_poll)), GFP_ATOMIC);
+						rtl_alloc_exact(sizeof(struct wlanmic_poll), GFP_ATOMIC);
 		if (!pwlanmic_poll) {
 			rc = -ENOMEM;
 			printk(KERN_ERR "Can't kmalloc for wlanmic_poll (size %d)\n", sizeof(struct wlanmic_poll));
@@ -18602,7 +18625,7 @@ err_out_free:
 #ifndef PRIV_STA_BUF
 #ifndef USE_DMA_ALLOCATE
 	if (phw)
-		kfree(phw);
+		rtl_free_exact(phw, sizeof(struct rtl8192cd_hw));
 #else
 	if (phw) {
 		printk("****** %s %d, free allocated addr %pa\n", __FUNCTION__, __LINE__, &phw);
@@ -18618,17 +18641,17 @@ err_out_free:
 		}
 #endif
 	if (pshare)	// david
-		kfree(pshare);
+		rtl_free_exact(pshare, sizeof(struct priv_shared_info));
 	if (pwlan_hdr_poll)
-		kfree(pwlan_hdr_poll);
+		rtl_free_exact(pwlan_hdr_poll, sizeof(struct wlan_hdr_poll));
 	if (pwlanllc_hdr_poll)
-		kfree(pwlanllc_hdr_poll);
+		rtl_free_exact(pwlanllc_hdr_poll, sizeof(struct wlanllc_hdr_poll));
 	if (pwlanbuf_poll)
-		kfree(pwlanbuf_poll);
+		rtl_free_exact(pwlanbuf_poll, sizeof(struct wlanbuf_poll));
 	if (pwlanicv_poll)
-		kfree(pwlanicv_poll);
+		rtl_free_exact(pwlanicv_poll, sizeof(struct wlanicv_poll));
 	if (pwlanmic_poll)
-		kfree(pwlanmic_poll);
+		rtl_free_exact(pwlanmic_poll, sizeof(struct wlanmic_poll));
 #endif
 	if (pwlan_acl_poll)
 		kfree(pwlan_acl_poll);
@@ -19120,13 +19143,13 @@ if (GET_HCI_TYPE(priv) == RTL_HCI_USB || GET_HCI_TYPE(priv) == RTL_HCI_SDIO) {
 	}
 #endif
 #ifndef PRIV_STA_BUF
-	kfree(priv->pshare->pwlan_hdr_poll);
-	kfree(priv->pshare->pwlanllc_hdr_poll);
-	kfree(priv->pshare->pwlanbuf_poll);
-	kfree(priv->pshare->pwlanicv_poll);
-	kfree(priv->pshare->pwlanmic_poll);
+	rtl_free_exact(priv->pshare->pwlan_hdr_poll, sizeof(struct wlan_hdr_poll));
+	rtl_free_exact(priv->pshare->pwlanllc_hdr_poll, sizeof(struct wlanllc_hdr_poll));
+	rtl_free_exact(priv->pshare->pwlanbuf_poll, sizeof(struct wlanbuf_poll));
+	rtl_free_exact(priv->pshare->pwlanicv_poll, sizeof(struct wlanicv_poll));
+	rtl_free_exact(priv->pshare->pwlanmic_poll, sizeof(struct wlanmic_poll));
 #ifndef USE_DMA_ALLOCATE
-	kfree(priv->pshare->phw);
+	rtl_free_exact(priv->pshare->phw, sizeof(struct rtl8192cd_hw));
 #else
 	if (priv->pshare->phw) {
 		dma_free_coherent(cma_dev, sizeof(struct rtl8192cd_hw), priv->pshare->phw, priv->pshare->hw_dma_phys);
@@ -19140,7 +19163,7 @@ if (GET_HCI_TYPE(priv) == RTL_HCI_USB || GET_HCI_TYPE(priv) == RTL_HCI_SDIO) {
 		priv->pshare->rsv_buf = NULL;
 	}
 #endif
-	kfree(priv->pshare);	// david
+	rtl_free_exact(priv->pshare, sizeof(struct priv_shared_info));	// david
 #endif
 
 #ifdef EN_EFUSE
@@ -20344,7 +20367,7 @@ void MDL_EXIT rtl8192cd_exit(void *data)
 	kfree((void *)priv->pshare->phw->alloc_dma_buf);
 
 #ifndef USE_DMA_ALLOCATE
-	kfree(priv->pshare->phw);
+	rtl_free_exact(priv->pshare->phw, sizeof(struct rtl8192cd_hw));
 #else
 	if (priv->pshare->phw) {
 		dma_free_coherent(cma_dev, sizeof(struct rtl8192cd_hw), priv->pshare->phw, priv->pshare->hw_dma_phys);
@@ -20352,11 +20375,11 @@ void MDL_EXIT rtl8192cd_exit(void *data)
 		priv->pshare->hw_dma_phys = NULL;
 	}
 #endif
-	kfree(priv->pshare->pwlan_hdr_poll);
-	kfree(priv->pshare->pwlanllc_hdr_poll);
-	kfree(priv->pshare->pwlanbuf_poll);
-	kfree(priv->pshare->pwlanicv_poll);
-	kfree(priv->pshare->pwlanmic_poll);
+	rtl_free_exact(priv->pshare->pwlan_hdr_poll, sizeof(struct wlan_hdr_poll));
+	rtl_free_exact(priv->pshare->pwlanllc_hdr_poll, sizeof(struct wlanllc_hdr_poll));
+	rtl_free_exact(priv->pshare->pwlanbuf_poll, sizeof(struct wlanbuf_poll));
+	rtl_free_exact(priv->pshare->pwlanicv_poll, sizeof(struct wlanicv_poll));
+	rtl_free_exact(priv->pshare->pwlanmic_poll, sizeof(struct wlanmic_poll));
 #endif
 	kfree(priv->pwlan_acl_poll);
 	kfree(priv->Eap_packet);
@@ -20365,7 +20388,7 @@ void MDL_EXIT rtl8192cd_exit(void *data)
 #endif
 	free_site_survey_res(priv->site_survey);
 #ifndef PRIV_STA_BUF
-	kfree(priv->pshare);	// david
+	rtl_free_exact(priv->pshare, sizeof(struct priv_shared_info));	// david
 #endif
 	kfree(dev);
 
