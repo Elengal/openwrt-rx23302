@@ -14256,8 +14256,8 @@ int InitWlanBuffer88XX(struct rtl8192cd_priv *priv)
 	{
 #ifdef DMA_BUF_SEP
 		page_rxbd_ptr = os_malloc(DESC_DMA_RXBD_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
-		page_txbd_ptr = os_malloc(DESC_DMA_TXBD_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
-		page_txdesc_ptr = os_malloc(DESC_DMA_TXDESC_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
+		page_txbd_ptr = rtl_alloc_exact(DESC_DMA_TXBD_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
+		page_txdesc_ptr = rtl_alloc_exact(DESC_DMA_TXDESC_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
 		page_bcn_ptr = os_malloc(DESC_DMA_BCN_PAGE_SIZE + PAGE_SIZE, GFP_KERNEL);
 #else
 		page_ptr = os_malloc(DESC_DMA_PAGE_SIZE, GFP_KERNEL);
@@ -14270,7 +14270,7 @@ int InitWlanBuffer88XX(struct rtl8192cd_priv *priv)
 #endif // WLAN_SUPPORT_FW_CMD
 
 #if defined(WLAN_HAL_TX_AMSDU) && !defined(CONFIG_NET_PCI)
-	    page_ptr_amsdu = os_malloc(DESC_DMA_PAGE_SIZE_HAL_FOR_AMSDU, GFP_KERNEL);
+	    page_ptr_amsdu = rtl_alloc_exact(DESC_DMA_PAGE_SIZE_HAL_FOR_AMSDU, GFP_KERNEL);
 #endif
 
 #ifdef DMA_BUF_SEP
@@ -14370,9 +14370,9 @@ alloc_fail:
 	if (page_rxbd_ptr)
 		kfree(page_rxbd_ptr);
 	if (page_txbd_ptr)
-		kfree(page_txbd_ptr);
+		rtl_free_exact(page_txbd_ptr, DESC_DMA_TXBD_PAGE_SIZE + PAGE_SIZE);
 	if (page_txdesc_ptr)
-		kfree(page_txdesc_ptr);
+		rtl_free_exact(page_txdesc_ptr, DESC_DMA_TXDESC_PAGE_SIZE + PAGE_SIZE);
 	if (page_bcn_ptr)
 		kfree(page_bcn_ptr);
 #else
@@ -14389,7 +14389,7 @@ alloc_fail:
 #endif
 #if defined(WLAN_HAL_TX_AMSDU) && !defined(CONFIG_NET_PCI)
 	if (page_ptr_amsdu)
-		kfree(page_ptr_amsdu);
+		rtl_free_exact(page_ptr_amsdu, DESC_DMA_PAGE_SIZE_HAL_FOR_AMSDU);
 #endif
 
 	return FAIL;
@@ -14781,7 +14781,9 @@ int InitWlanBuffer88XX_V1(struct rtl8192cd_priv *priv)
 *****************/
 
 #ifdef DMA_BUF_SEP
-		page_txbd_ptr = kmalloc(txbd_dma_size + PAGE_SIZE, GFP_ATOMIC);
+		/* RX23302: TXBD/TXDESC/AMSDU - через rtl_alloc_exact(): 2,4 ГГц 256+512+512 КБ -> 232+456+260,
+		 * 5 ГГц 256+512+512 -> 200+392+260. Запас +PAGE_SIZE оставлен как был. */
+		page_txbd_ptr = rtl_alloc_exact(txbd_dma_size + PAGE_SIZE, GFP_ATOMIC);
 		if (page_txbd_ptr == NULL) {
 			panic_printk(KERN_ERR "can't allocate desc_txbd_dma_buf page, abort!\n");
 			_GET_HAL_DATA(priv)->desc_dma_txbd_buf_len = 0;
@@ -14790,7 +14792,7 @@ int InitWlanBuffer88XX_V1(struct rtl8192cd_priv *priv)
 		_GET_HAL_DATA(priv)->desc_txbd_dma_buf = (unsigned char *)(((unsigned long)page_txbd_ptr + PAGE_SIZE-1) & ~(PAGE_SIZE-1));
 		_GET_HAL_DATA(priv)->desc_dma_txbd_buf_len = txbd_dma_size;
 
-		page_txdesc_ptr = kmalloc(txdesc_dma_size + PAGE_SIZE, GFP_ATOMIC);
+		page_txdesc_ptr = rtl_alloc_exact(txdesc_dma_size + PAGE_SIZE, GFP_ATOMIC);
 		if (page_txdesc_ptr == NULL) {
 			panic_printk(KERN_ERR "can't allocate desc_txdesc_dma_buf page, abort!\n");
 			_GET_HAL_DATA(priv)->desc_dma_txdesc_buf_len = 0;
@@ -14845,7 +14847,7 @@ int InitWlanBuffer88XX_V1(struct rtl8192cd_priv *priv)
         page_ptr_h2c = kmalloc(H2C_BUFFER_SIZE, GFP_KERNEL);
 #endif // WLAN_SUPPORT_H2C_PACKET
 #if defined(WLAN_HAL_TX_AMSDU) && !defined(CONFIG_NET_PCI)
-        page_ptr_amsdu = kmalloc(AMSDU_dma_size, GFP_KERNEL);
+        page_ptr_amsdu = rtl_alloc_exact(AMSDU_dma_size, GFP_KERNEL);
         _GET_HAL_DATA(priv)->desc_dma_buf_amsdu = (unsigned char *)(((unsigned long)page_ptr_amsdu + PAGE_SIZE-1) & ~(PAGE_SIZE-1));
         _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu = (unsigned long)_GET_HAL_DATA(priv)->desc_dma_buf_amsdu + AMSDU_dma_size - ((unsigned long)page_ptr_amsdu);
 		printk("%s: AMSDU: cpu_addr %p, size %u\n", __func__, _GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);	/* RX23302: у вендора __func__ без %s - печатался не тот адрес и размер */
@@ -14888,9 +14890,9 @@ alloc_fail:
 
 #ifdef DMA_BUF_SEP
 	if (page_txbd_ptr)
-		kfree(page_txbd_ptr);
+		rtl_free_exact(page_txbd_ptr, txbd_dma_size + PAGE_SIZE);
 	if (page_txdesc_ptr)
-		kfree(page_txdesc_ptr);
+		rtl_free_exact(page_txdesc_ptr, txdesc_dma_size + PAGE_SIZE);
 	if (page_bcn_ptr)
 		kfree(page_bcn_ptr);
 #else
@@ -14903,7 +14905,7 @@ alloc_fail:
 #endif
 #if defined(WLAN_HAL_TX_AMSDU) && !defined(CONFIG_NET_PCI)
 	if (page_ptr_amsdu)
-		kfree(page_ptr_amsdu);
+		rtl_free_exact(page_ptr_amsdu, AMSDU_dma_size);
 #endif
 
     return FAIL;
@@ -18954,12 +18956,13 @@ if (GET_HCI_TYPE(priv) == RTL_HCI_PCIE) {
 		{
 #ifdef DMA_BUF_SEP
 			if (_GET_HAL_DATA(priv)->desc_txbd_dma_buf) {
-				kfree(_GET_HAL_DATA(priv)->desc_txbd_dma_buf);
+				/* RX23302: выделено rtl_alloc_exact(), адрес выровнен - тот же, что вернул аллокатор */
+				rtl_free_exact(_GET_HAL_DATA(priv)->desc_txbd_dma_buf, _GET_HAL_DATA(priv)->desc_dma_txbd_buf_len + PAGE_SIZE);
 				_GET_HAL_DATA(priv)->desc_txbd_dma_buf = NULL;
 			}
 
 			if (_GET_HAL_DATA(priv)->desc_txdesc_dma_buf) {
-				kfree(_GET_HAL_DATA(priv)->desc_txdesc_dma_buf);
+				rtl_free_exact(_GET_HAL_DATA(priv)->desc_txdesc_dma_buf, _GET_HAL_DATA(priv)->desc_dma_txdesc_buf_len + PAGE_SIZE);
 				_GET_HAL_DATA(priv)->desc_txdesc_dma_buf = NULL;
 			}
 
@@ -19000,7 +19003,7 @@ if (GET_HCI_TYPE(priv) == RTL_HCI_PCIE) {
 
 #if defined(WLAN_HAL_TX_AMSDU) && !defined(CONFIG_NET_PCI)
             if (_GET_HAL_DATA(priv)->desc_dma_buf_amsdu) {
-                kfree(_GET_HAL_DATA(priv)->desc_dma_buf_amsdu);
+                rtl_free_exact(_GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);
                 _GET_HAL_DATA(priv)->desc_dma_buf_amsdu = NULL;
 			}
 #endif
