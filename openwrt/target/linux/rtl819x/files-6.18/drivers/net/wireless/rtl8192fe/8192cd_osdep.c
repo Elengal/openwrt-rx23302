@@ -14317,7 +14317,7 @@ int InitWlanBuffer88XX(struct rtl8192cd_priv *priv)
 	    } else {
 	        _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu = DESC_DMA_PAGE_SIZE_HAL_FOR_AMSDU;
 	    }
-		printk("AMSDU: cpu_addr %p, size %d\n",__func__, _GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);
+		printk("%s: AMSDU: cpu_addr %p, size %u\n", __func__, _GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);	/* RX23302: у вендора __func__ без %s - печатался не тот адрес и размер */
 #endif
 	}
 #endif // PRIV_STA_BUF
@@ -14822,7 +14822,7 @@ int InitWlanBuffer88XX_V1(struct rtl8192cd_priv *priv)
         page_ptr_amsdu = kmalloc(AMSDU_dma_size, GFP_KERNEL);
         _GET_HAL_DATA(priv)->desc_dma_buf_amsdu = (unsigned char *)(((unsigned long)page_ptr_amsdu + PAGE_SIZE-1) & ~(PAGE_SIZE-1));
         _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu = (unsigned long)_GET_HAL_DATA(priv)->desc_dma_buf_amsdu + AMSDU_dma_size - ((unsigned long)page_ptr_amsdu);
-		printk("AMSDU: cpu_addr %p, size %d\n",__func__, _GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);
+		printk("%s: AMSDU: cpu_addr %p, size %u\n", __func__, _GET_HAL_DATA(priv)->desc_dma_buf_amsdu, _GET_HAL_DATA(priv)->desc_dma_buf_len_amsdu);	/* RX23302: у вендора __func__ без %s - печатался не тот адрес и размер */
 #endif
 
 #ifdef WLAN_SUPPORT_H2C_PACKET
