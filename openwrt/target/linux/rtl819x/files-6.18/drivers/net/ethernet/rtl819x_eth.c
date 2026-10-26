@@ -29,6 +29,7 @@
 #include <linux/platform_device.h>
 
 #include "rtl819x_eth.h"
+#include "rtl819x_hwnat.h"
 
 #define RTL819X_DRV_NAME	"rtl819x-eth"
 
@@ -1333,6 +1334,9 @@ static const struct net_device_ops rtl819x_netdev_ops = {
 	.ndo_set_mac_address	= rtl819x_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_tx_timeout		= rtl819x_tx_timeout,
+#if IS_ENABLED(CONFIG_NET_RTL819X_HWNAT)
+	.ndo_setup_tc		= rtl819x_hwnat_setup_tc,
+#endif
 };
 
 /* ---- описание чипов ---------------------------------------------------- */
@@ -1440,6 +1444,11 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	dev->min_mtu = ETH_ZLEN;
 	dev->max_mtu = eth->soc->max_mtu;
 	dev->watchdog_timeo = 5 * HZ;
+	/* аппаратный NAT через flowtable, docs/hwnat-plan.md */
+	if (IS_ENABLED(CONFIG_NET_RTL819X_HWNAT)) {
+		dev->hw_features |= NETIF_F_HW_TC;
+		dev->features |= NETIF_F_HW_TC;
+	}
 
 	netif_napi_add(dev, &eth->napi, rtl819x_poll);
 
@@ -1453,6 +1462,11 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	proc_create_single("rtl819x_spa", 0444, NULL, rtl819x_spa_pokaz);
 	proc_create("rtl819x_gnezda", 0644, NULL, &rtl819x_gnezda_ops);
 
+	ret = rtl819x_hwnat_init(dev);
+	if (ret)
+		netdev_warn(dev, "hardware NAT: init failed (%d), software only\n",
+			    ret);
+
 	netdev_info(dev, "Realtek RTL819x Ethernet at %pR, irq %d\n",
 		    platform_get_resource(pdev, IORESOURCE_MEM, 0), eth->irq);
 
@@ -1464,6 +1478,7 @@ static void rtl819x_eth_remove(struct platform_device *pdev)
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct rtl819x_eth *eth = netdev_priv(dev);
 
+	rtl819x_hwnat_exit(dev);
 	rtl819x_irq_disable_all(eth);
 	netif_napi_del(&eth->napi);
 }

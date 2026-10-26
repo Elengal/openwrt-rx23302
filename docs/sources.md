@@ -31,6 +31,7 @@ This is an engineering provenance review, not legal advice.
 | LZMA-загрузчик ядра | `image/lzma-loader/` | OpenWrt (Gabor Juhos) + Weijie Gao | GPL-2.0 |
 | Упаковщик образа `cvimg` (KE32) | `tools/cvimg/` | Weijie Gao, по мотивам утилиты Realtek | GPL-2.0 |
 | Ethernet-контроллер 8197F | `files-6.18/drivers/net/ethernet/rtl819x_eth.*` | **написан в этом проекте**, значения регистров сверены с Realtek SDK (`rtl819x_swNic.c`, GPL) | GPL-2.0-only |
+| Аппаратный NAT 8197F (скелет, [план](hwnat-plan.md)) | `files-6.18/drivers/net/ethernet/rtl819x_hwnat.*` | **этот проект**; привязка к flowtable и разбор подмен MAC/портов — по драйверу [iptime A2004MU](https://github.com/Putpocket/iptime-a2004mu-openwrt) (`rtl8197f_eth.c`, `cd3d082`) | GPL-2.0-only |
 | Device tree RX23302 | `dts/rtl8197f_electra_rx23302.dts` | **этот проект**, по живому устройству | GPL-2.0 |
 | Скрипты образа | `scripts/rx23302-full-image.py`, `scripts/rx23302-tftp-image.py`, `scripts/rtl819x-rootfs-chksum.py` | **этот проект**; формат TFTP-образа — по разбору заводского загрузчика | GPL-2.0-only |
 | base-files (netifd/wifi-скрипты, 02_network, uci-defaults); утилита `rtlmib` — пакет из исходника | `base-files/`, `package/utils/rtlmib/` | **этот проект**; `rtl8192cd.sh` по мотивам [sowarden/hh71vm-openwrt](https://github.com/sowarden/hh71vm-openwrt) (`8881e78`) | GPL-2.0 |
