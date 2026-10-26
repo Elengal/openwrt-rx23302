@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Сборка прошивки на каждый PR и на main - тот же ./build.sh, что и вручную.
+# Firmware build for every PR and for main, with the same ./build.sh.
+#
+# Только собирает и складывает артефакты: ни релизов, ни тегов, ни пушей,
+# своих секретов не нужно (встроенный токен, права только на чтение).
+# Build only: no releases, tags or pushes; no secrets, read-only token.
+#
+# Сверка с релизом: если входы сборки (openwrt/, openwrt-upstream.patch,
+# versions.mk.sh, build.sh) совпадают с последним тегом, manifest обязан
+# совпасть с manifest из релиза этого тега, иначе сборка падает: CI собрал
+# бы не то, что выпущено. Если входы другие, разница только печатается.
+
+name: build
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      BUILD: ${{ github.workspace }}/build
+      OUT: ${{ github.workspace }}/build/bin/targets/rtl819x/rtl8197f
+    steps:
+      # Сборке нужно ~15 ГБ, на раннере свободно около 14: убираем то,
+      # чем OpenWrt не пользуется.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # теги нужны для сверки с релизом
+
+      # Список из руководства OpenWrt (Ubuntu), libncurses5-dev в 24.04
+      # называется libncurses-dev.
+      - name: Build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget
+
+      # build.sh клонирует OpenWrt сам, но только в пустой каталог, а кэш
+      # исходников надо положить в build/dl до сборки. Поэтому клон здесь,
+      # build.sh его увидит и клонировать не будет.
+      - name: Clone OpenWrt
+        run: |
+          . ./versions.mk.sh
+          git clone "$OPENWRT_URL" "$BUILD"
+
+      # Архивы исходников: проверяются по хешам самим OpenWrt, так что кэш
+      # на результат не влияет, только экономит скачивание.
+      - name: Source cache
+        uses: actions/cache@v4
+        with:
+          path: build/dl
+          key: dl-${{ hashFiles('versions.mk.sh', 'openwrt/target/linux/rtl819x/rx23302.diffconfig') }}
+          restore-keys: dl-
+
+      - name: Build
+        id: build
+        run: ./build.sh "$BUILD"
+
+      # При ошибке make -j скрывает причину: повторяем в один поток с
+      # подробным выводом, чтобы упавший пакет было видно в логе.
+      - name: Show the failing step
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          cd "$BUILD"
+          make -j1 V=s 2>&1 | tail -n 300
+
+      # sha256 образов в том же виде, что sha256sums.txt в релизах.
+      # Конфиг ядра и .vermagic - чтобы было с чем сравнить, если хеш
+      # пакета kernel в manifest разойдётся с релизом.
+      - name: Collect
+        run: |
+          cd "$OUT"
+          sha256sum *.bin | tee sha256sums.txt
+          linux=$(find "$BUILD"/build_dir/target-*/linux-rtl819x_rtl8197f \
+                       -maxdepth 1 -type d -name 'linux-6.*' | head -n 1)
+          if [ -n "$linux" ]; then
+            cp "$linux/.config" kernel.config
+            cp "$linux/.vermagic" kernel.vermagic || true
+          else
+            echo "::warning::kernel build directory not found"
+          fi
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rx23302-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/bin/targets/rtl819x/rtl8197f/*.bin
+            build/bin/targets/rtl819x/rtl8197f/*.manifest
+            build/bin/targets/rtl819x/rtl8197f/*.buildinfo
+            build/bin/targets/rtl819x/rtl8197f/sha256sums.txt
+            build/bin/targets/rtl819x/rtl8197f/kernel.config
+            build/bin/targets/rtl819x/rtl8197f/kernel.vermagic
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Compare manifest with the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          built=$(ls "$OUT"/*.manifest)
+          tag=$(git describe --tags --abbrev=0)
+          mkdir -p release
+          if ! gh release download "$tag" --pattern '*.manifest' --dir release; then
+            echo "::notice::release $tag has no manifest, nothing to compare"
+            exit 0
+          fi
+          if git diff --quiet "$tag" HEAD -- openwrt openwrt-upstream.patch versions.mk.sh build.sh; then
+            echo "Build inputs equal $tag: the manifest must match the release"
+            diff -u release/*.manifest "$built"
+            echo "manifest matches release $tag"
+          else
+            echo "Build inputs differ from $tag: differences are expected, shown for reference"
+            diff -u release/*.manifest "$built" || true
+          fi
