@@ -14086,17 +14086,20 @@ static struct ss_res* alloc_site_survey_res(gfp_t flags)
 #endif
 {
 	struct ss_res *res;
-	
-	res = (struct ss_res *)rtw_vmalloc_flag(sizeof(struct ss_res), flags);
+
+	/* RX23302: rtw_vmalloc_flag() у нас kmalloc() (CONFIG_USE_VMALLOC только для USB/SDIO):
+	 * 163 КБ занимали блок 256 КБ на каждый из 10 интерфейсов. Таблица только для процессора,
+	 * DMA к ней нет, выделяется при загрузке с GFP_KERNEL - vmalloc() берёт 41 страницу. */
+	res = (struct ss_res *)_rtw_vmalloc(sizeof(struct ss_res));
 	if (NULL == res) return NULL;
-	
+
 	memset(res, 0, sizeof(struct ss_res));
 	return res;
 }
 
 static void free_site_survey_res(struct ss_res *res)
 {
-	rtw_vmfree(res, sizeof(struct ss_res));
+	_rtw_vmfree(res, sizeof(struct ss_res));	/* RX23302: пара к _rtw_vmalloc() */
 }
 
 
