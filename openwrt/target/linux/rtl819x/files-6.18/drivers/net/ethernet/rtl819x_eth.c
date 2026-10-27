@@ -20,6 +20,7 @@
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
 #include <linux/interrupt.h>
+#include <linux/ipv6.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
@@ -27,6 +28,7 @@
 #include <linux/of_net.h>
 #include <linux/phylink.h>
 #include <linux/platform_device.h>
+#include <net/ip.h>
 
 #include "rtl819x_eth.h"
 
@@ -289,6 +291,14 @@ static int rtl819x_rx_refill(struct rtl819x_eth *eth, struct rtl819x_ring *ring,
 	ring->skb[idx] = skb;
 	desc->addr = cpu_to_le32(dma);
 	desc->opts2 = 0;
+	/*
+	 * opts4/opts5 тоже чистим: по ним rtl819x_rx_csum_ok() решает, верить
+	 * ли сумме. Если железо на следующем кадре их не перепишет (например,
+	 * не разберёт метку 802.1Q), там остались бы биты «IPv4, сумма верна»
+	 * от прошлого кадра в этом же дескрипторе.
+	 */
+	desc->opts4 = 0;
+	desc->opts5 = 0;
 
 	/*
 	 * Бит own отдаём последним: до этого момента дескриптор наш,
@@ -422,6 +432,8 @@ static u32 rtl819x_spa_opts[8][5];
 static u8 rtl819x_spa_mac[8][ETH_ALEN];
 /* v6.5: сколько кадров ушло в какие гнёзда (см. rtl819x_tx_gnezda) */
 static unsigned long rtl819x_tx_wan, rtl819x_tx_lan, rtl819x_tx_bez_metki;
+/* сумму TCP/UDP проверило железо / проверит ядро (см. rtl819x_rx_csum_ok) */
+static unsigned long rtl819x_rx_csum_hw, rtl819x_rx_csum_sw;
 
 static void rtl819x_spa_uchet(struct rtl819x_rx_desc *desc, struct sk_buff *skb)
 {
@@ -445,6 +457,8 @@ static int rtl819x_spa_pokaz(struct seq_file *m, void *v)
 	seq_printf(m, "P0GMIICR(414c)=%08x\n", *(volatile u32 *)0xBB80414C);
 	seq_printf(m, "tx: wan(vid 8 -> port 0) %lu, lan(vid 9 -> 3,4) %lu, untagged(-> 3,4) %lu\n",
 		   rtl819x_tx_wan, rtl819x_tx_lan, rtl819x_tx_bez_metki);
+	seq_printf(m, "rx csum: hw %lu, sw %lu\n",
+		   rtl819x_rx_csum_hw, rtl819x_rx_csum_sw);
 	for (i = 0; i < 8; i++)
 		seq_printf(m, "spa %u: %lu frames, last from %pM, opts1 %08x opts2 %08x opts3 %08x opts4 %08x opts5 %08x\n",
 			   i, rtl819x_spa_schet[i], rtl819x_spa_mac[i],
@@ -452,6 +466,71 @@ static int rtl819x_spa_pokaz(struct seq_file *m, void *v)
 			   rtl819x_spa_opts[i][2], rtl819x_spa_opts[i][3],
 			   rtl819x_spa_opts[i][4]);
 	return 0;
+}
+
+/*
+ * Контрольные суммы приёма.
+ *
+ * Без них каждый пакет TCP приходит в GRO с CHECKSUM_NONE, и ядро считает
+ * сумму по всему его телу (tcp4_gro_receive -> skb_gro_checksum_validate).
+ * Это лишний проход по данным, которые только что пришли по DMA и в кэше
+ * не лежат. При маршрутизации тело пакета больше никто не читает, так что
+ * для проходящего трафика это чистая потеря.
+ *
+ * Донор проверял биты на кадрах без метки 802.1Q, а у нас почти всё идёт
+ * с меткой (eth0.8, eth0.9). Поэтому железу верим, только если и сами
+ * видим в кадре TCP или UDP, не фрагмент. Во всех прочих случаях остаётся
+ * CHECKSUM_NONE, то есть ядро проверяет само, как раньше. Если железо
+ * метку не разбирает, оно просто не выставит биты - хуже, чем было, не
+ * станет. Сколько кадров проверило железо - в /proc/rtl819x_spa.
+ */
+static bool rtl819x_rx_csum_ok(const struct rtl819x_rx_desc *desc,
+			       const struct sk_buff *skb)
+{
+	u32 o4 = le32_to_cpu(desc->opts4);
+	u32 o5 = le32_to_cpu(desc->opts5);
+	const u8 *d = skb->data;
+	unsigned int off = ETH_HLEN;
+	u16 proto;
+
+	if (skb->len < ETH_HLEN)
+		return false;
+
+	proto = (d[12] << 8) | d[13];
+	if (proto == ETH_P_8021Q) {
+		if (skb->len < VLAN_ETH_HLEN)
+			return false;
+		proto = (d[16] << 8) | d[17];
+		off = VLAN_ETH_HLEN;
+	}
+
+	if (proto == ETH_P_IP) {
+		const struct iphdr *iph = (const struct iphdr *)(d + off);
+
+		if (!(o4 & RTL819X_RX_IPV4) ||
+		    (o5 & (RTL819X_RX_L3CS_OK | RTL819X_RX_L4CS_OK)) !=
+		    (RTL819X_RX_L3CS_OK | RTL819X_RX_L4CS_OK))
+			return false;
+		if (skb->len < off + sizeof(*iph) || ip_is_fragment(iph))
+			return false;
+
+		return iph->protocol == IPPROTO_TCP ||
+		       iph->protocol == IPPROTO_UDP;
+	}
+
+	if (proto == ETH_P_IPV6) {
+		const struct ipv6hdr *ip6h = (const struct ipv6hdr *)(d + off);
+
+		if (!(o4 & RTL819X_RX_IPV6) || !(o5 & RTL819X_RX_L4CS_OK))
+			return false;
+		if (skb->len < off + sizeof(*ip6h))
+			return false;
+
+		return ip6h->nexthdr == IPPROTO_TCP ||
+		       ip6h->nexthdr == IPPROTO_UDP;
+	}
+
+	return false;
 }
 
 static int rtl819x_rx_ring_poll(struct rtl819x_eth *eth, unsigned int r,
@@ -528,6 +607,13 @@ static int rtl819x_rx_ring_poll(struct rtl819x_eth *eth, unsigned int r,
 
 		skb_put(skb, len);
 		rtl819x_spa_uchet(desc, skb);
+		if ((dev->features & NETIF_F_RXCSUM) &&
+		    rtl819x_rx_csum_ok(desc, skb)) {
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
+			rtl819x_rx_csum_hw++;
+		} else {
+			rtl819x_rx_csum_sw++;
+		}
 		skb->protocol = eth_type_trans(skb, dev);
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += len;
@@ -1437,6 +1523,9 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 		eth_hw_addr_random(dev);
 
 	dev->netdev_ops = &rtl819x_netdev_ops;
+	/* проверка сумм на приёме, выключается ethtool -K eth0 rx off */
+	dev->hw_features |= NETIF_F_RXCSUM;
+	dev->features |= NETIF_F_RXCSUM;
 	dev->min_mtu = ETH_ZLEN;
 	dev->max_mtu = eth->soc->max_mtu;
 	dev->watchdog_timeo = 5 * HZ;
