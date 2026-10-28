@@ -46,7 +46,8 @@ static void rtl819x_rings_free(struct rtl819x_eth *eth);
 static int rtl819x_rings_init(struct rtl819x_eth *eth);
 static void rtl819x_irq_enable_rx(struct rtl819x_eth *eth);
 static int rtl819x_poll(struct napi_struct *napi, int budget);
-static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r);
+static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r,
+			       int budget);
 
 /**
  * struct rtl819x_ring - кольцо дескрипторов с сопутствующими буферами
@@ -145,7 +146,15 @@ static void rtl819x_irq_disable_all(struct rtl819x_eth *eth)
  */
 static void rtl819x_irq_mask_rx(struct rtl819x_eth *eth)
 {
-	rtl819x_m32(eth, RTL819X_IIMR_RX_BITS, 0, RTL819X_CPUIIMR);
+	/*
+	 * Вместе с приёмом снимаем и «всё передано»: освобождение
+	 * отправленных буферов теперь тоже делает NAPI. Раньше оно шло прямо
+	 * в обработчике прерывания, и на каждый отправленный пакет приходилось
+	 * своё прерывание — 105-130 тыс. в секунду при 600 Мбит/с (замер
+	 * 28.10.2026), заметная доля процессора на одном только входе-выходе.
+	 */
+	rtl819x_m32(eth, RTL819X_IIMR_RX_BITS | RTL819X_TX_ALL_DONE_IE_ALL, 0,
+		    RTL819X_CPUIIMR);
 }
 
 static void rtl819x_irq_enable_rx(struct rtl819x_eth *eth)
@@ -177,22 +186,13 @@ static irqreturn_t rtl819x_irq(int irq, void *dev_id)
 	if (!status)
 		return IRQ_HANDLED;
 
-	if (status & (RTL819X_RX_DONE_IP_ALL | RTL819X_PKTHDR_RUNOUT_IP_ALL)) {
+	/* и приём, и конец передачи разбирает NAPI (rtl819x_poll) */
+	if (status & (RTL819X_RX_DONE_IP_ALL | RTL819X_PKTHDR_RUNOUT_IP_ALL |
+		      RTL819X_TX_ALL_DONE_IP_ALL)) {
 		if (napi_schedule_prep(&eth->napi)) {
 			rtl819x_irq_mask_rx(eth);
 			__napi_schedule(&eth->napi);
 		}
-	}
-
-	if (status & RTL819X_TX_ALL_DONE_IP_ALL) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&eth->lock, flags);
-		rtl819x_tx_reclaim(eth, 0);
-		spin_unlock_irqrestore(&eth->lock, flags);
-
-		if (netif_queue_stopped(dev))
-			netif_wake_queue(dev);
 	}
 
 	return IRQ_HANDLED;
@@ -271,13 +271,22 @@ static int rtl819x_alloc_ring(struct rtl819x_eth *eth, struct rtl819x_ring *ring
 
 /* Подвесить буфер к приёмному дескриптору и отдать его железу. */
 static int rtl819x_rx_refill(struct rtl819x_eth *eth, struct rtl819x_ring *ring,
-			     unsigned int idx)
+			     unsigned int idx, bool in_napi)
 {
 	struct rtl819x_rx_desc *desc = (struct rtl819x_rx_desc *)ring->desc + idx;
 	struct sk_buff *skb;
 	dma_addr_t dma;
 
-	skb = netdev_alloc_skb_ip_align(eth->dev, RTL819X_RX_BUF_SIZE);
+	/*
+	 * Из NAPI берём буфер из его собственного запаса: туда же
+	 * napi_consume_skb() возвращает отправленные. Отступ под выравнивание
+	 * IP тот же, что у netdev_alloc_skb_ip_align(). При открытии
+	 * интерфейса (не в softirq) — как раньше.
+	 */
+	if (in_napi)
+		skb = napi_alloc_skb(&eth->napi, RTL819X_RX_BUF_SIZE);
+	else
+		skb = netdev_alloc_skb_ip_align(eth->dev, RTL819X_RX_BUF_SIZE);
 	if (!skb)
 		return -ENOMEM;
 
@@ -325,7 +334,7 @@ static int rtl819x_rings_init(struct rtl819x_eth *eth)
 			goto err;
 
 		for (j = 0; j < eth->rx[i].size; j++) {
-			ret = rtl819x_rx_refill(eth, &eth->rx[i], j);
+			ret = rtl819x_rx_refill(eth, &eth->rx[i], j, false);
 			if (ret)
 				goto err;
 		}
@@ -441,6 +450,14 @@ static void rtl819x_spa_uchet(struct rtl819x_rx_desc *desc, struct sk_buff *skb)
 	unsigned int spa = (o4 >> 13) & 7;
 
 	rtl819x_spa_schet[spa]++;
+	/*
+	 * Снимок дескриптора — отладка, на каждом кадре он не нужен:
+	 * дескрипторы лежат в некэшируемой памяти, и пять лишних чтений
+	 * на пакет при 50 тыс. пакетов в секунду заметны. Берём первые
+	 * 64 кадра каждого источника, потом каждый 64-й.
+	 */
+	if (rtl819x_spa_schet[spa] > 64 && (rtl819x_spa_schet[spa] & 63))
+		return;
 	rtl819x_spa_opts[spa][0] = le32_to_cpu(desc->opts1);
 	rtl819x_spa_opts[spa][1] = le32_to_cpu(desc->opts2);
 	rtl819x_spa_opts[spa][2] = le32_to_cpu(desc->opts3);
@@ -631,7 +648,7 @@ next:
 			ring->skb[ring->head] = NULL;
 		}
 
-		if (rtl819x_rx_refill(eth, ring, ring->head)) {
+		if (rtl819x_rx_refill(eth, ring, ring->head, true)) {
 			/*
 			 * Буфера нет — дескриптор и индекс не трогаем вовсе,
 			 * пакет останется в кольце до следующего захода
@@ -660,8 +677,20 @@ next:
 static int rtl819x_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl819x_eth *eth = container_of(napi, struct rtl819x_eth, napi);
+	struct net_device *dev = eth->dev;
 	int done = 0;
 	unsigned int r;
+
+	/*
+	 * Сначала освобождаем отправленное: буферы вернутся в запас NAPI
+	 * (napi_consume_skb), и приёмник ниже возьмёт их оттуда же.
+	 * Блокировка та же, что у start_xmit: он тоже зовёт reclaim.
+	 */
+	spin_lock_bh(&eth->lock);
+	rtl819x_tx_reclaim(eth, 0, budget);
+	spin_unlock_bh(&eth->lock);
+	if (netif_queue_stopped(dev))
+		netif_wake_queue(dev);
 
 	for (r = 0; r < eth->soc->rx_rings && done < budget; r++)
 		done += rtl819x_rx_ring_poll(eth, r, budget - done);
@@ -675,8 +704,13 @@ static int rtl819x_poll(struct napi_struct *napi, int budget)
 
 /* ---- передача ------------------------------------------------------------ */
 
-/* Освободить буферы пакетов, которые железо уже отправило. */
-static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
+/*
+ * Освободить буферы пакетов, которые железо уже отправило.
+ * budget > 0 — зовут из NAPI: буфер уходит в запас NAPI, откуда его снова
+ * возьмёт приёмник; budget == 0 — из start_xmit (кольцо забито).
+ */
+static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r,
+			       int budget)
 {
 	struct rtl819x_ring *ring = &eth->tx[r];
 	u32 cdp = rtl819x_r32(eth, RTL819X_CPUTPDCR(r));
@@ -721,7 +755,7 @@ static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
 			eth->dev->stats.tx_packets++;
 			eth->dev->stats.tx_bytes += ring->skb[ring->tail]->len;
 
-			dev_consume_skb_any(ring->skb[ring->tail]);
+			napi_consume_skb(ring->skb[ring->tail], budget);
 			ring->skb[ring->tail] = NULL;
 		}
 
@@ -1181,9 +1215,13 @@ static netdev_tx_t rtl819x_start_xmit(struct sk_buff *skb,
 
 	spin_lock_irqsave(&eth->lock, flags);
 
-	rtl819x_tx_reclaim(eth, 0);
-
+	/*
+	 * Отправленное освобождает NAPI (rtl819x_poll). Здесь — только если
+	 * кольцо забито: вдруг железо уже прошло дальше, а NAPI ещё не успел.
+	 */
 	next = (ring->head + 1) % ring->size;
+	if (next == ring->tail)
+		rtl819x_tx_reclaim(eth, 0, 0);
 	if (next == ring->tail) {
 		/* кольцо забито — просим стек придержать поток */
 		netif_stop_queue(dev);
