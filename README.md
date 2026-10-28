@@ -108,6 +108,10 @@ cd openwrt-rx23302
 накладывает каталог [`openwrt/`](openwrt/) и [`openwrt-upstream.patch`](openwrt-upstream.patch),
 закрепляет фиды и собирает.
 
+Тот же `build.sh` гоняет GitHub Actions на каждый PR и на `main`
+([.github/workflows/build.yml](.github/workflows/build.yml)): образы, manifest и sha256 — в артефактах
+сборки. Это только проверка сборки, не релизы: на железе их никто не проверял.
+
 ### Откуда код
 
 Порт собран из работы многих людей — подробно, со ссылками и лицензиями:
@@ -160,5 +164,6 @@ stock image in the second slot are not overwritten. Tried it? Please report in
 fallback over UART (`…-squashfs-full.bin`) — [docs/install-uart.md](docs/install-uart.md).
 **Upgrade:** LuCI → System → Backup / Flash firmware, or `sysupgrade`, with `…-squashfs-sysupgrade.bin`.
 **Recovery:** [docs/recovery.md](docs/recovery.md).
-**Build:** `./build.sh` (Linux, ~15 GB, OpenWrt build prerequisites).
+**Build:** `./build.sh` (Linux, ~15 GB, OpenWrt build prerequisites). GitHub Actions runs the same script for
+every PR and for `main`; images are in the run artifacts (build check only, not releases, not tested on hardware).
 **Sources and licenses:** [docs/sources.md](docs/sources.md); project code is GPL-2.0, see [LICENSE](LICENSE).
