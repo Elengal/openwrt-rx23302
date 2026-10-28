@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# RX23302: hook the software flowtable on eth0 itself as well.
+#
+# fw4 puts only the zone devices into "ft" (br-lan and eth0.8 here), so
+# the offloaded fast path starts only after the frame has gone through
+# the 802.1Q layer. eth0 carries both VLANs (eth0.8 = WAN, eth0.9 = LAN);
+# hooked on eth0, a known flow is forwarded straight from the driver.
+# Measured on the board 28.10.2026 (iperf3 through NAT, 1 Gbit both sides):
+# 766/703 -> 860/876 Mbit/s (LAN->WAN / WAN->LAN).
+#
+# Picked up by fw4 automatically (auto_includes); the "devices" list is
+# merged into the flowtable fw4 itself creates.
+flowtable ft {
+	hook ingress priority 0;
+	devices = { "eth0" };
+}
