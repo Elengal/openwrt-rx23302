@@ -31,6 +31,7 @@
 #include <net/ip.h>
 
 #include "rtl819x_eth.h"
+#include "rtl819x_hwnat.h"
 
 #define RTL819X_DRV_NAME	"rtl819x-eth"
 
@@ -46,7 +47,16 @@ static void rtl819x_rings_free(struct rtl819x_eth *eth);
 static int rtl819x_rings_init(struct rtl819x_eth *eth);
 static void rtl819x_irq_enable_rx(struct rtl819x_eth *eth);
 static int rtl819x_poll(struct napi_struct *napi, int budget);
-static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r);
+static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r,
+			       int budget);
+
+/* группы внутреннего свитча: 9 = LAN (eth0.9), 8 = WAN (eth0.8) */
+#define RTL_NASH_VID		9
+#define RTL_WAN_VID		8
+/* режим роутера, см. rtl819x_tx_gnezda() */
+static bool rtl819x_router;
+#define RTL_WAN_GNEZDO		0	/* порт 8367 синего гнезда WAN */
+static void rtl819x_fdb_learn(const u8 *mac, unsigned int port);
 
 /**
  * struct rtl819x_ring - кольцо дескрипторов с сопутствующими буферами
@@ -145,7 +155,15 @@ static void rtl819x_irq_disable_all(struct rtl819x_eth *eth)
  */
 static void rtl819x_irq_mask_rx(struct rtl819x_eth *eth)
 {
-	rtl819x_m32(eth, RTL819X_IIMR_RX_BITS, 0, RTL819X_CPUIIMR);
+	/*
+	 * Вместе с приёмом снимаем и «всё передано»: освобождение
+	 * отправленных буферов теперь тоже делает NAPI. Раньше оно шло прямо
+	 * в обработчике прерывания, и на каждый отправленный пакет приходилось
+	 * своё прерывание — 105-130 тыс. в секунду при 600 Мбит/с (замер
+	 * 28.10.2026), заметная доля процессора на одном только входе-выходе.
+	 */
+	rtl819x_m32(eth, RTL819X_IIMR_RX_BITS | RTL819X_TX_ALL_DONE_IE_ALL, 0,
+		    RTL819X_CPUIIMR);
 }
 
 static void rtl819x_irq_enable_rx(struct rtl819x_eth *eth)
@@ -177,22 +195,13 @@ static irqreturn_t rtl819x_irq(int irq, void *dev_id)
 	if (!status)
 		return IRQ_HANDLED;
 
-	if (status & (RTL819X_RX_DONE_IP_ALL | RTL819X_PKTHDR_RUNOUT_IP_ALL)) {
+	/* и приём, и конец передачи разбирает NAPI (rtl819x_poll) */
+	if (status & (RTL819X_RX_DONE_IP_ALL | RTL819X_PKTHDR_RUNOUT_IP_ALL |
+		      RTL819X_TX_ALL_DONE_IP_ALL)) {
 		if (napi_schedule_prep(&eth->napi)) {
 			rtl819x_irq_mask_rx(eth);
 			__napi_schedule(&eth->napi);
 		}
-	}
-
-	if (status & RTL819X_TX_ALL_DONE_IP_ALL) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&eth->lock, flags);
-		rtl819x_tx_reclaim(eth, 0);
-		spin_unlock_irqrestore(&eth->lock, flags);
-
-		if (netif_queue_stopped(dev))
-			netif_wake_queue(dev);
 	}
 
 	return IRQ_HANDLED;
@@ -271,13 +280,22 @@ static int rtl819x_alloc_ring(struct rtl819x_eth *eth, struct rtl819x_ring *ring
 
 /* Подвесить буфер к приёмному дескриптору и отдать его железу. */
 static int rtl819x_rx_refill(struct rtl819x_eth *eth, struct rtl819x_ring *ring,
-			     unsigned int idx)
+			     unsigned int idx, bool in_napi)
 {
 	struct rtl819x_rx_desc *desc = (struct rtl819x_rx_desc *)ring->desc + idx;
 	struct sk_buff *skb;
 	dma_addr_t dma;
 
-	skb = netdev_alloc_skb_ip_align(eth->dev, RTL819X_RX_BUF_SIZE);
+	/*
+	 * Из NAPI берём буфер из его собственного запаса: туда же
+	 * napi_consume_skb() возвращает отправленные. Отступ под выравнивание
+	 * IP тот же, что у netdev_alloc_skb_ip_align(). При открытии
+	 * интерфейса (не в softirq) — как раньше.
+	 */
+	if (in_napi)
+		skb = napi_alloc_skb(&eth->napi, RTL819X_RX_BUF_SIZE);
+	else
+		skb = netdev_alloc_skb_ip_align(eth->dev, RTL819X_RX_BUF_SIZE);
 	if (!skb)
 		return -ENOMEM;
 
@@ -325,7 +343,7 @@ static int rtl819x_rings_init(struct rtl819x_eth *eth)
 			goto err;
 
 		for (j = 0; j < eth->rx[i].size; j++) {
-			ret = rtl819x_rx_refill(eth, &eth->rx[i], j);
+			ret = rtl819x_rx_refill(eth, &eth->rx[i], j, false);
 			if (ret)
 				goto err;
 		}
@@ -435,12 +453,32 @@ static unsigned long rtl819x_tx_wan, rtl819x_tx_lan, rtl819x_tx_bez_metki;
 /* сумму TCP/UDP проверило железо / проверит ядро (см. rtl819x_rx_csum_ok) */
 static unsigned long rtl819x_rx_csum_hw, rtl819x_rx_csum_sw;
 
+/*
+ * Почему свитч отдал кадр процессору: поле reason (opts3 биты 0..15)
+ * приёмного дескриптора, по вендорскому rtl819x_swNic.h (struct rx_desc).
+ * Это тот же why2cpu, что в HSA. Считаем по коду причины (биты 1..4) и
+ * помним последний полный код для каждой — см. /proc/rtl819x_spa.
+ */
+static unsigned long rtl819x_why_schet[16];
+static u16 rtl819x_why_posl[16];
+
 static void rtl819x_spa_uchet(struct rtl819x_rx_desc *desc, struct sk_buff *skb)
 {
 	u32 o4 = le32_to_cpu(desc->opts4);
 	unsigned int spa = (o4 >> 13) & 7;
+	u16 why = le32_to_cpu(desc->opts3) & 0xffff;
 
+	rtl819x_why_schet[(why >> 1) & 0xf]++;
+	rtl819x_why_posl[(why >> 1) & 0xf] = why;
 	rtl819x_spa_schet[spa]++;
+	/*
+	 * Снимок дескриптора — отладка, на каждом кадре он не нужен:
+	 * дескрипторы лежат в некэшируемой памяти, и пять лишних чтений
+	 * на пакет при 50 тыс. пакетов в секунду заметны. Берём первые
+	 * 64 кадра каждого источника, потом каждый 64-й.
+	 */
+	if (rtl819x_spa_schet[spa] > 64 && (rtl819x_spa_schet[spa] & 63))
+		return;
 	rtl819x_spa_opts[spa][0] = le32_to_cpu(desc->opts1);
 	rtl819x_spa_opts[spa][1] = le32_to_cpu(desc->opts2);
 	rtl819x_spa_opts[spa][2] = le32_to_cpu(desc->opts3);
@@ -459,6 +497,10 @@ static int rtl819x_spa_pokaz(struct seq_file *m, void *v)
 		   rtl819x_tx_wan, rtl819x_tx_lan, rtl819x_tx_bez_metki);
 	seq_printf(m, "rx csum: hw %lu, sw %lu\n",
 		   rtl819x_rx_csum_hw, rtl819x_rx_csum_sw);
+	for (i = 0; i < 16; i++)
+		if (rtl819x_why_schet[i])
+			seq_printf(m, "why2cpu prichina %u: %lu frames, last code %04x\n",
+				   i, rtl819x_why_schet[i], rtl819x_why_posl[i]);
 	for (i = 0; i < 8; i++)
 		seq_printf(m, "spa %u: %lu frames, last from %pM, opts1 %08x opts2 %08x opts3 %08x opts4 %08x opts5 %08x\n",
 			   i, rtl819x_spa_schet[i], rtl819x_spa_mac[i],
@@ -615,6 +657,29 @@ static int rtl819x_rx_ring_poll(struct rtl819x_eth *eth, unsigned int r,
 			rtl819x_rx_csum_sw++;
 		}
 		skb->protocol = eth_type_trans(skb, dev);
+		/*
+		 * Режим роутера: кадр приходит без метки, номер гнезда — в
+		 * дескрипторе (opts4 биты 13..15, как в rtl819x_spa_uchet).
+		 * Ставим VID сами, чтобы 8021q раздал кадры в eth0.8 / eth0.9.
+		 * Если метка всё же есть в данных — отдаём её стеку как есть.
+		 */
+		/*
+		 * Гнездо источника учим всегда, с меткой кадр или без: 8367
+		 * отдаёт кадры к процессору С МЕТКОЙ (порт 7 — tagged-член
+		 * VLAN 8/9), так что без этого таблица оставалась пустой
+		 * (замер 28.10.2026 11:58: fdb пуст, LAN2 получал весь поток).
+		 */
+		if (READ_ONCE(rtl819x_router))
+			rtl819x_fdb_learn(eth_hdr(skb)->h_source,
+					  (le32_to_cpu(desc->opts4) >> 13) & 7);
+		if (READ_ONCE(rtl819x_router) &&
+		    skb->protocol != htons(ETH_P_8021Q)) {
+			unsigned int spa = (le32_to_cpu(desc->opts4) >> 13) & 7;
+
+			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q),
+					       spa == RTL_WAN_GNEZDO ?
+					       RTL_WAN_VID : RTL_NASH_VID);
+		}
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += len;
 
@@ -631,7 +696,7 @@ next:
 			ring->skb[ring->head] = NULL;
 		}
 
-		if (rtl819x_rx_refill(eth, ring, ring->head)) {
+		if (rtl819x_rx_refill(eth, ring, ring->head, true)) {
 			/*
 			 * Буфера нет — дескриптор и индекс не трогаем вовсе,
 			 * пакет останется в кольце до следующего захода
@@ -660,8 +725,20 @@ next:
 static int rtl819x_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl819x_eth *eth = container_of(napi, struct rtl819x_eth, napi);
+	struct net_device *dev = eth->dev;
 	int done = 0;
 	unsigned int r;
+
+	/*
+	 * Сначала освобождаем отправленное: буферы вернутся в запас NAPI
+	 * (napi_consume_skb), и приёмник ниже возьмёт их оттуда же.
+	 * Блокировка та же, что у start_xmit: он тоже зовёт reclaim.
+	 */
+	spin_lock_bh(&eth->lock);
+	rtl819x_tx_reclaim(eth, 0, budget);
+	spin_unlock_bh(&eth->lock);
+	if (netif_queue_stopped(dev))
+		netif_wake_queue(dev);
 
 	for (r = 0; r < eth->soc->rx_rings && done < budget; r++)
 		done += rtl819x_rx_ring_poll(eth, r, budget - done);
@@ -675,8 +752,13 @@ static int rtl819x_poll(struct napi_struct *napi, int budget)
 
 /* ---- передача ------------------------------------------------------------ */
 
-/* Освободить буферы пакетов, которые железо уже отправило. */
-static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
+/*
+ * Освободить буферы пакетов, которые железо уже отправило.
+ * budget > 0 — зовут из NAPI: буфер уходит в запас NAPI, откуда его снова
+ * возьмёт приёмник; budget == 0 — из start_xmit (кольцо забито).
+ */
+static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r,
+			       int budget)
 {
 	struct rtl819x_ring *ring = &eth->tx[r];
 	u32 cdp = rtl819x_r32(eth, RTL819X_CPUTPDCR(r));
@@ -721,7 +803,7 @@ static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
 			eth->dev->stats.tx_packets++;
 			eth->dev->stats.tx_bytes += ring->skb[ring->tail]->len;
 
-			dev_consume_skb_any(ring->skb[ring->tail]);
+			napi_consume_skb(ring->skb[ring->tail], budget);
 			ring->skb[ring->tail] = NULL;
 		}
 
@@ -811,9 +893,9 @@ static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
  *
  * Число 0x23D1E совпало с тем, что даёт наша раскладка битов для
  * маски 0x11E. Значит раскладка прочитана верно.
+ *
+ * RTL_NASH_VID / RTL_WAN_VID объявлены в начале файла: они нужны и приёмнику.
  */
-#define RTL_NASH_VID		9
-#define RTL_WAN_VID		8
 #define RTL_LAN_PORTY		0x11F
 
 /*
@@ -858,23 +940,99 @@ static void rtl819x_tx_reclaim(struct rtl819x_eth *eth, unsigned int r)
 static u32 rtl819x_gnezda_wan = RTL_8367_WAN_GNEZDA;
 static u32 rtl819x_gnezda_lan = RTL_8367_LAN_GNEZDA;
 
+/*
+ * Режим «роутер» (router mode), как у стока и у донора DIR-842
+ * (ADCDS/openwrt-dlink-dir842-r1, SWITCH-AND-DATAPATH.md §3):
+ *   - внутренний свитч 8197F видит гнёзда 8367 своими портами 0..4
+ *     (MACCR1.PORT0_ROUTER_MODE + CPU-тег в обе стороны, P0GMIICR биты 25/26);
+ *   - метка 802.1Q в ПРОВОД не идёт: VID едет в дескрипторе (opts3),
+ *     а выход VLAN без метки (untag), как у стока;
+ *   - на приёме VID ставим сами по гнезду из дескриптора (spa):
+ *     гнездо 0 = WAN (VID 8), остальные = LAN (VID 9).
+ * Для ядра ничего не меняется: eth0.8/eth0.9, мост и flowtable те же,
+ * метку стек отдаёт и получает через hwaccel (NETIF_F_HW_VLAN_CTAG_*).
+ *
+ * Включается ТОЛЬКО на живом интерфейсе через /proc/rtl819x_router
+ * (по умолчанию 0 = как было до 28.10.2026), чтобы откат был мгновенным:
+ *   echo 1 > /proc/rtl819x_router   - включить
+ *   echo 0 > /proc/rtl819x_router   - вернуть старый 802.1Q-транк
+ */
+/* куда слать в режиме роутера: внутр. порты 8197F = гнёзда 8367 */
+#define RTL_ROUTER_WAN_DP	0x01	/* гнездо 0 */
+#define RTL_ROUTER_LAN_DP	0x18	/* гнёзда 3 и 4 (LAN1, LAN2) */
+
+/*
+ * В каком гнезде LAN живёт MAC: учим по приёму (spa из дескриптора), чтобы
+ * кадр клиенту шёл ТОЛЬКО в его гнездо. Без этого маска 0x18 рассылает
+ * каждый кадр и в LAN1, и в LAN2, и всё упирается в самое медленное
+ * гнездо: замер 28.10.2026 — 85 Мбит/с, порт 4 (приставка, 100 Мбит)
+ * получил весь поток. Таблица маленькая, по хешу MAC; коллизия или
+ * устаревшая запись дают лишь лишнюю рассылку в оба гнезда либо кадр в
+ * старое гнездо до первого же кадра от клиента (тогда запись обновится).
+ */
+#define RTL_FDB_BITS		8
+struct rtl819x_fdb {
+	u8	mac[ETH_ALEN];
+	u8	port;		/* 0 = пусто, иначе номер гнезда */
+};
+static struct rtl819x_fdb rtl819x_fdb[1 << RTL_FDB_BITS];
+
+static unsigned int rtl819x_fdb_hash(const u8 *mac)
+{
+	return (mac[3] ^ mac[4] ^ (mac[5] << 1) ^ (mac[5] >> 7)) &
+	       ((1 << RTL_FDB_BITS) - 1);
+}
+
+static void rtl819x_fdb_learn(const u8 *mac, unsigned int port)
+{
+	struct rtl819x_fdb *e = &rtl819x_fdb[rtl819x_fdb_hash(mac)];
+
+	if (is_multicast_ether_addr(mac) || port == RTL_WAN_GNEZDO || port > 4)
+		return;
+	if (e->port == port && ether_addr_equal(e->mac, mac))
+		return;
+	ether_addr_copy(e->mac, mac);
+	WRITE_ONCE(e->port, port);
+}
+
+static u32 rtl819x_fdb_dp(const u8 *mac, u32 dp_vse)
+{
+	struct rtl819x_fdb *e = &rtl819x_fdb[rtl819x_fdb_hash(mac)];
+	unsigned int port = READ_ONCE(e->port);
+
+	if (port && !is_multicast_ether_addr(mac) && ether_addr_equal(e->mac, mac))
+		return BIT(port);
+	return dp_vse;
+}
+
+/* VID кадра: из hwaccel-метки, иначе из метки в данных, иначе 0 */
+static u16 rtl819x_tx_vid(const struct sk_buff *skb)
+{
+	if (skb_vlan_tag_present(skb))
+		return skb_vlan_tag_get_id(skb);
+	if (skb->len >= VLAN_ETH_HLEN &&
+	    skb->data[12] == 0x81 && skb->data[13] == 0x00)
+		return ((skb->data[14] & 0x0f) << 8) | skb->data[15];
+	return 0;
+}
+
 static u32 rtl819x_tx_gnezda(const struct sk_buff *skb)
 {
-	u16 vid;
+	u16 vid = rtl819x_tx_vid(skb);
 
-	if (skb->len >= VLAN_ETH_HLEN &&
-	    skb->data[12] == 0x81 && skb->data[13] == 0x00) {
-		vid = ((skb->data[14] & 0x0f) << 8) | skb->data[15];
-		if (vid == RTL_WAN_VID) {
-			rtl819x_tx_wan++;
-			return READ_ONCE(rtl819x_gnezda_wan);
-		}
-		rtl819x_tx_lan++;
-		return READ_ONCE(rtl819x_gnezda_lan);
+	if (vid == RTL_WAN_VID) {
+		rtl819x_tx_wan++;
+		return READ_ONCE(rtl819x_router) ? RTL_ROUTER_WAN_DP :
+		       READ_ONCE(rtl819x_gnezda_wan);
 	}
-
-	rtl819x_tx_bez_metki++;
-	return READ_ONCE(rtl819x_gnezda_lan);
+	if (vid)
+		rtl819x_tx_lan++;
+	else
+		rtl819x_tx_bez_metki++;
+	if (!READ_ONCE(rtl819x_router))
+		return READ_ONCE(rtl819x_gnezda_lan);
+	/* адрес получателя — первые 6 байт кадра (метки в данных уже нет) */
+	return rtl819x_fdb_dp(skb->data, RTL_ROUTER_LAN_DP);
 }
 
 static int rtl819x_gnezda_pokaz(struct seq_file *m, void *v)
@@ -999,6 +1157,58 @@ static int rtl819x_intsw_zapis_vlan(u16 vid, u32 chleny, u32 untag, u32 fid)
 	return 0;
 }
 
+/*
+ * Строка таблицы L2 (MAC -> порты) внутреннего свитча. Формат и хеш строки —
+ * донор DIR-842 (rtl865x_asichal.c: gw_l2_row, gw_write_l2_full), значения
+ * сверены донором со стоком 3.10 (/proc/rtl865x/l2):
+ *   строка = (MAC[0]^..^MAC[5]^fh[fid]) & 0xFF, fh = {00, 0f, f0, ff};
+ *   индекс в таблице = строка << 2 (столбец 0 из четырёх);
+ *   слово 0 = MAC[1..4], слово 1 = MAC[0] | member<<8 | extmember<<14 |
+ *             toCPU<<17 | STA(1<<18) | age 3<<19 | NH(1<<22) | fid<<23 | auth<<25.
+ * na_cpu: member 0, extmember 0x4 (порт процессора 8), toCPU 1, auth 1.
+ * Пишется тем же окном таблиц, что и VLAN (тип 0 = L2_SWITCH).
+ */
+#define RTL_TYPE_L2_TABLE	0
+
+static int rtl819x_intsw_zapis_l2(const u8 *mac, u32 fid, bool na_cpu)
+{
+	static const u8 fh[4] = { 0x00, 0x0f, 0xf0, 0xff };
+	u32 slovo[8], stroka;
+	unsigned int i;
+	int ret;
+
+	if (!na_cpu)
+		return -EINVAL;
+
+	stroka = (mac[0] ^ mac[1] ^ mac[2] ^ mac[3] ^ mac[4] ^ mac[5] ^
+		  fh[fid & 3]) & 0xFF;
+
+	memset(slovo, 0, sizeof(slovo));
+	slovo[0] = (mac[1] << 24) | (mac[2] << 16) | (mac[3] << 8) | mac[4];
+	slovo[1] = mac[0] | (0u << 8) | (0x4u << 14) | (1u << 17) |
+		   (1u << 18) | (3u << 19) | (1u << 22) | ((fid & 3) << 23) |
+		   (1u << 25);
+
+	rtl_sw_w(RTL_SWTCR0, RTL_EN_STOP_TLU | rtl_sw_r(RTL_SWTCR0));
+	ret = rtl819x_intsw_zhdat(RTL_SWTCR0, RTL_STOP_TLU_READY,
+				  RTL_STOP_TLU_READY);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < 8; i++)
+		rtl_sw_w(RTL_TCR(i), slovo[i]);
+	rtl_sw_w(RTL_SWTAA, RTL_SWTBL_BASE + (RTL_TYPE_L2_TABLE << 16) +
+			    (stroka << 2) * RTL_TBL_ENTRY_LEN);
+	rtl_sw_w(RTL_SWTACR, RTL_ACTION_START | RTL_CMD_FORCE);
+	ret = rtl819x_intsw_zhdat(RTL_SWTACR, RTL_ACTION_MASK, RTL_ACTION_DONE);
+
+	rtl_sw_w(RTL_SWTCR0, ~RTL_EN_STOP_TLU & rtl_sw_r(RTL_SWTCR0));
+
+	pr_info("rtl819x-sw: L2 row %u (idx %u) fid %u <- %08x %08x, ret %d\n",
+		stroka, stroka << 2, fid, slovo[0], slovo[1], ret);
+	return ret;
+}
+
 /* PVID порта: по два порта на регистр, чётный в младшей половине */
 static void rtl819x_intsw_pvid(unsigned int port, u16 vid)
 {
@@ -1010,6 +1220,280 @@ static void rtl819x_intsw_pvid(unsigned int port, u16 vid)
 	znach |= ((u32)vid & 0xFFF) << sdvig;
 	rtl_sw_w(adres, znach);
 }
+
+/*
+ * Включить / выключить режим роутера на живом интерфейсе.
+ *
+ * Значения сняты со СТОКА под нагрузкой 28.10.2026 (regs-diff-stock-vs-ours):
+ *   MACCR1   (BB804058) = 1          PORT0_ROUTER_MODE
+ *   P0GMIICR (BB80414C) = 06037D57   + бит 26: CPU-тег и на передачу
+ *   PVCR0    (BB804A08) p0 = 8       кадр без метки из гнезда WAN -> группа 8
+ *   VLAN 9 = порты 1-4 + 8 (0x11E), без порта 0 (иначе WAN в LAN-группе)
+ * Выключение возвращает ровно то, что пишет rtl819x_intsw_nastroit().
+ * Таблицу MAC внешнего 8367 после смены сбрасывает пользователь
+ * (debugfs 0x0a36 = 0x00ff), как после любой перекоммутации стенда.
+ */
+static int rtl819x_intsw_zapis_vlan(u16 vid, u32 chleny, u32 untag, u32 fid);
+static void rtl819x_intsw_pvid(unsigned int port, u16 vid);
+static int rtl819x_intsw_zapis_l2(const u8 *mac, u32 fid, bool na_cpu);
+
+static struct net_device *rtl819x_dev;	/* для MAC роутера в router_set */
+
+static void rtl819x_router_set(bool on)
+{
+	int ret;
+
+	/*
+	 * MAC самого роутера -> только процессор, в обеих группах (FID 0 = LAN,
+	 * FID 1 = WAN). Без этой строки в router mode кадр «роутеру» для свитча
+	 * — неизвестный адрес, и он разливает его по группе: снимок HSA
+	 * 29.10.2026 00:35 — dp 41 (порт 0 + CPU) вместо dp 40, весь поток
+	 * LAN->WAN уходил копией обратно в 8367 и в LAN2 (100 Мбит),
+	 * отсюда потолок ~94 Мбит/с. У стока такая строка есть
+	 * (/proc/rtl865x/l2: «router MAC FID:0 mbr(8)»), у донора DIR-842 —
+	 * gw_write_l2_full(CPU-MAC, 0, ext 0x4, toCPU 1, fid, auth 1).
+	 */
+	if (on && rtl819x_dev) {
+		ret = rtl819x_intsw_zapis_l2(rtl819x_dev->dev_addr, 0, true);
+		ret |= rtl819x_intsw_zapis_l2(rtl819x_dev->dev_addr, 1, true);
+		pr_info("rtl819x: L2 %pM -> CPU (fid 0, 1): %d\n",
+			rtl819x_dev->dev_addr, ret);
+	}
+
+	if (on) {
+		ret = rtl819x_intsw_zapis_vlan(RTL_NASH_VID, RTL_LAN_PORTY & ~1u,
+					       RTL_LAN_PORTY & ~1u, 0);
+		rtl819x_intsw_pvid(0, RTL_WAN_VID);
+		WRITE_ONCE(rtl819x_router, true);
+		/* порядок как у вендорского init_8197f_p0(): тег, затем режим */
+		rtl_sw_w(0xBB80414C, 0x06037D57);
+		rtl_sw_w(0xBB804058, rtl_sw_r(0xBB804058) | 1);
+	} else {
+		rtl_sw_w(0xBB804058, rtl_sw_r(0xBB804058) & ~1u);
+		rtl_sw_w(0xBB80414C, 0x02037D57);
+		WRITE_ONCE(rtl819x_router, false);
+		rtl819x_intsw_pvid(0, RTL_NASH_VID);
+		ret = rtl819x_intsw_zapis_vlan(RTL_NASH_VID, RTL_LAN_PORTY,
+					       RTL_LAN_PORTY, 0);
+	}
+	pr_info("rtl819x: router mode %s (vlan %d) MACCR1=%08x P0GMIICR=%08x PVCR0=%08x\n",
+		on ? "ON" : "off", ret, rtl_sw_r(0xBB804058),
+		rtl_sw_r(0xBB80414C), rtl_sw_r(RTL_PVCR(0)));
+}
+
+/* ---- экспорт для rtl819x_hwnat.c ---------------------------------------- */
+
+bool rtl819x_router_mode(void)
+{
+	return READ_ONCE(rtl819x_router);
+}
+
+/* маска гнезда, в котором живёт MAC клиента (по таблице, выученной на RX);
+ * 0 = не знаем — вызывающий возьмёт запасное значение */
+u32 rtl819x_lan_jack_mask(const u8 *mac)
+{
+	struct rtl819x_fdb *e = &rtl819x_fdb[rtl819x_fdb_hash(mac)];
+	unsigned int port = READ_ONCE(e->port);
+
+	if (port && port != RTL_WAN_GNEZDO && port <= 4 &&
+	    ether_addr_equal(e->mac, mac))
+		return BIT(port);
+	return 0;
+}
+
+struct net_device *rtl819x_eth_dev(void)
+{
+	return rtl819x_dev;
+}
+
+static int rtl819x_router_pokaz(struct seq_file *m, void *v)
+{
+	unsigned int i;
+
+	seq_printf(m, "%d\n", READ_ONCE(rtl819x_router) ? 1 : 0);
+	for (i = 0; i < ARRAY_SIZE(rtl819x_fdb); i++)
+		if (rtl819x_fdb[i].port)
+			seq_printf(m, "fdb %pM -> gnezdo %u\n",
+				   rtl819x_fdb[i].mac, rtl819x_fdb[i].port);
+	return 0;
+}
+
+static int rtl819x_router_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rtl819x_router_pokaz, NULL);
+}
+
+static ssize_t rtl819x_router_zapis(struct file *file, const char __user *buf,
+				    size_t dlina, loff_t *poz)
+{
+	char c;
+
+	if (!dlina || get_user(c, buf))
+		return -EFAULT;
+	if (c != '0' && c != '1')
+		return -EINVAL;
+	rtl819x_router_set(c == '1');
+	return dlina;
+}
+
+static const struct proc_ops rtl819x_router_ops = {
+	.proc_open    = rtl819x_router_open,
+	.proc_read    = seq_read,
+	.proc_lseek   = seq_lseek,
+	.proc_release = single_release,
+	.proc_write   = rtl819x_router_zapis,
+};
+
+/* ---- «уши» свитча: что он решил по пакету (HSB/HSA) ---------------------
+ *
+ * Перед каждым пакетом свитч разбирает заголовок в HSB (Header Stamp
+ * Before, 0xBB806280) и кладёт своё решение в HSA (Header Stamp After,
+ * 0xBB806200): куда отправить, сделал ли сам (hwfwrd) или отдал процессору
+ * и почему (why2cpu). Расшифровка — из вендорского SDK
+ * (AsicDriver/rtl865xC_hs.h, ветка CONFIG_RTL_8197F, _LITTLE_ENDIAN),
+ * порядок чтения и ожидание HSABUSY (TMCR 0xBB806300 бит 2) — как у донора
+ * iptime A2004MU (hswatch_store).
+ *
+ *   echo "c0a80032 c0a80101" > /proc/rtl819x_hs   ждать пакет sip -> dip (до 10 с)
+ *   echo "0 0" > /proc/rtl819x_hs                 любой IPv4-пакет
+ *   cat /proc/rtl819x_hs                          что поймали
+ * Только чтение регистров, свитч не трогаем.
+ */
+#define RTL_HSA_BASE		0xBB806200
+#define RTL_HSB_BASE		0xBB806280
+#define RTL_TMCR		0xBB806300
+#define RTL_TMCR_HSABUSY	BIT(2)
+#define RTL_HS_SLOV		23
+
+static u32 rtl819x_hsb[RTL_HS_SLOV], rtl819x_hsa[RTL_HS_SLOV];
+static u32 rtl819x_hs_sip, rtl819x_hs_dip;
+static int rtl819x_hs_sost;	/* 0 нет снимка, 1 пойман, 2 не дождались */
+static DEFINE_MUTEX(rtl819x_hs_lock);
+
+static u32 rtl819x_hsb_sip(const u32 *b)
+{
+	return (b[1] >> 2) | ((b[2] & 3) << 30);
+}
+
+static u32 rtl819x_hsb_dip(const u32 *b)
+{
+	return (b[2] >> 18) | ((b[3] & 0x3ffff) << 14);
+}
+
+static int rtl819x_hs_pokaz(struct seq_file *m, void *v)
+{
+	static const char * const tip[8] = { "eth", "pptp", "ipv4", "icmp",
+					     "igmp", "tcp", "udp", "ipv6" };
+	const u32 *b = rtl819x_hsb, *a = rtl819x_hsa;
+	u32 why;
+	int i;
+
+	mutex_lock(&rtl819x_hs_lock);
+	seq_printf(m, "sost %d (0 net, 1 poiman, 2 ne dozhdalis) filtr %pI4h -> %pI4h\n",
+		   rtl819x_hs_sost, &rtl819x_hs_sip, &rtl819x_hs_dip);
+	if (rtl819x_hs_sost == 1) {
+		u32 sip = rtl819x_hsb_sip(b), dip = rtl819x_hsb_dip(b);
+
+		why = (a[6] >> 18) | ((a[7] & 3) << 14);
+		/* W3[31:18] + W4[1:0] = dprt, W4[31:29] = type, W8[31:30] = extspa,
+		 * W8[24] = dirtx (кадр от процессора напрямую, без разбора) */
+		seq_printf(m, "HSB: spa %u extspa %u dirtx %u vid %u tag %u pppoe %u len %u  %pI4h:%u -> %pI4h:%u  tip %s\n",
+			   b[0] & 7, b[8] >> 30, (b[8] >> 24) & 1, b[0] >> 20,
+			   b[1] & 1, (b[1] >> 1) & 1, (b[0] >> 5) & 0x3fff,
+			   &sip, (b[2] >> 2) & 0xffff, &dip,
+			   (b[3] >> 18) | ((b[4] & 3) << 14),
+			   tip[b[4] >> 29]);
+		seq_printf(m, "HSA: hwfwrd %u  dp %02x dpext %x dpc %u  dvid %u svid %u  l2tr %u l34tr %u egif %u  spao %u  why2cpu %04x\n",
+			   (a[6] >> 8) & 1, a[8] & 0x7f, (a[6] >> 12) & 0xf,
+			   (a[6] >> 1) & 7, (a[4] >> 9) & 0xfff,
+			   (a[5] >> 14) & 0xfff, (a[4] >> 1) & 1, (a[4] >> 2) & 1,
+			   a[4] & 1, (a[6] >> 4) & 7, why);
+		seq_printf(m, "     why2cpu: [15] %u DDDDD %u SSSSS %u prichina %u acl-zerk %u\n",
+			   why >> 15, (why >> 10) & 0x1f, (why >> 5) & 0x1f,
+			   (why >> 1) & 0xf, why & 1);
+		seq_puts(m, "HSB:");
+		for (i = 0; i < RTL_HS_SLOV; i++)
+			seq_printf(m, " %08x", b[i]);
+		seq_puts(m, "\nHSA:");
+		for (i = 0; i < RTL_HS_SLOV; i++)
+			seq_printf(m, " %08x", a[i]);
+		seq_putc(m, '\n');
+	}
+	mutex_unlock(&rtl819x_hs_lock);
+	return 0;
+}
+
+static int rtl819x_hs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rtl819x_hs_pokaz, NULL);
+}
+
+static ssize_t rtl819x_hs_zapis(struct file *file, const char __user *buf,
+				size_t dlina, loff_t *poz)
+{
+	unsigned long srok = jiffies + 10 * HZ, flags;
+	unsigned long krug = 0;
+	char tekst[40];
+	u32 b[4], b8;
+	int i;
+
+	if (dlina >= sizeof(tekst))
+		return -EINVAL;
+	if (copy_from_user(tekst, buf, dlina))
+		return -EFAULT;
+	tekst[dlina] = 0;
+
+	mutex_lock(&rtl819x_hs_lock);
+	if (sscanf(tekst, "%x %x", &rtl819x_hs_sip, &rtl819x_hs_dip) != 2) {
+		mutex_unlock(&rtl819x_hs_lock);
+		return -EINVAL;
+	}
+	rtl819x_hs_sost = 2;
+	memset(rtl819x_hsb, 0, sizeof(rtl819x_hsb));
+	memset(rtl819x_hsa, 0, sizeof(rtl819x_hsa));
+
+	do {
+		for (i = 0; i < 4; i++)
+			b[i] = rtl_sw_r(RTL_HSB_BASE + i * 4);
+		b8 = rtl_sw_r(RTL_HSB_BASE + 8 * 4);
+		/*
+		 * W8 бит 24 = dirtx: кадр от процессора напрямую (свитч его не
+		 * разбирает). Нас интересуют кадры, которые свитч решал сам,
+		 * поэтому их пропускаем — как донор iptime.
+		 */
+		if (!(b8 & BIT(24)) &&
+		    ((rtl819x_hs_sip || rtl819x_hs_dip) ?
+		     (rtl819x_hsb_sip(b) == rtl819x_hs_sip &&
+		      rtl819x_hsb_dip(b) == rtl819x_hs_dip) :
+		     (b[1] || b[2] || b[3]))) {
+			local_irq_save(flags);
+			for (i = 0; i < 100 &&
+			     (rtl_sw_r(RTL_TMCR) & RTL_TMCR_HSABUSY); i++)
+				cpu_relax();
+			for (i = 0; i < RTL_HS_SLOV; i++) {
+				rtl819x_hsb[i] = i < 4 ? b[i] : i == 8 ? b8 :
+					rtl_sw_r(RTL_HSB_BASE + i * 4);
+				rtl819x_hsa[i] = rtl_sw_r(RTL_HSA_BASE + i * 4);
+			}
+			local_irq_restore(flags);
+			rtl819x_hs_sost = 1;
+			break;
+		}
+		cpu_relax();
+		if (!(++krug & 0xfff))
+			cond_resched();
+	} while (time_before(jiffies, srok));
+	mutex_unlock(&rtl819x_hs_lock);
+	return dlina;
+}
+
+static const struct proc_ops rtl819x_hs_ops = {
+	.proc_open    = rtl819x_hs_open,
+	.proc_read    = seq_read,
+	.proc_lseek   = seq_lseek,
+	.proc_release = single_release,
+	.proc_write   = rtl819x_hs_zapis,
+};
 
 static void rtl819x_intsw_nastroit(void)
 {
@@ -1178,17 +1662,37 @@ static netdev_tx_t rtl819x_start_xmit(struct sk_buff *skb,
 	unsigned int next, len, hwlen;
 	dma_addr_t dma;
 	unsigned long flags;
+	u16 vid;
 
 	spin_lock_irqsave(&eth->lock, flags);
 
-	rtl819x_tx_reclaim(eth, 0);
-
+	/*
+	 * Отправленное освобождает NAPI (rtl819x_poll). Здесь — только если
+	 * кольцо забито: вдруг железо уже прошло дальше, а NAPI ещё не успел.
+	 */
 	next = (ring->head + 1) % ring->size;
+	if (next == ring->tail)
+		rtl819x_tx_reclaim(eth, 0, 0);
 	if (next == ring->tail) {
 		/* кольцо забито — просим стек придержать поток */
 		netif_stop_queue(dev);
 		spin_unlock_irqrestore(&eth->lock, flags);
 		return NETDEV_TX_BUSY;
+	}
+
+	/*
+	 * Метку 802.1Q стек отдаёт отдельно (NETIF_F_HW_VLAN_CTAG_TX). В режиме
+	 * роутера она едет в дескрипторе, в провод не идёт. В старом режиме
+	 * (802.1Q-транк к 8367) кладём её в данные, как было раньше.
+	 */
+	vid = rtl819x_tx_vid(skb);
+	if (skb_vlan_tag_present(skb) && !READ_ONCE(rtl819x_router)) {
+		skb = __vlan_hwaccel_push_inside(skb);
+		if (!skb) {
+			spin_unlock_irqrestore(&eth->lock, flags);
+			dev->stats.tx_dropped++;
+			return NETDEV_TX_OK;
+		}
 	}
 
 	/*
@@ -1240,7 +1744,12 @@ static netdev_tx_t rtl819x_start_xmit(struct sk_buff *skb,
 	 * Вендор задаёт его всегда (tx_dvlanid, rtl819x_swNic.c:781);
 	 * без него кадр не принадлежит ни одной группе и пропадает.
 	 */
-	desc->opts3 = cpu_to_le32(RTL_NASH_VID & 0xFFF);
+	/*
+	 * В режиме роутера — настоящая группа кадра (8 = WAN, 9 = LAN): по ней
+	 * свитч снимает метку на выходе (группы без метки, как у стока).
+	 */
+	desc->opts3 = cpu_to_le32((READ_ONCE(rtl819x_router) && vid ? vid :
+				   RTL_NASH_VID) & 0xFFF);
 
 	/*
 	 * Порт назначения указываем явно. Полагаться на hwlkup нельзя:
@@ -1419,6 +1928,8 @@ static const struct net_device_ops rtl819x_netdev_ops = {
 	.ndo_set_mac_address	= rtl819x_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_tx_timeout		= rtl819x_tx_timeout,
+	/* аппаратный NAT: flowtable с флагом offload предлагает потоки */
+	.ndo_setup_tc		= rtl819x_hwnat_setup_tc,
 };
 
 /* ---- описание чипов ---------------------------------------------------- */
@@ -1526,6 +2037,19 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	/* проверка сумм на приёме, выключается ethtool -K eth0 rx off */
 	dev->hw_features |= NETIF_F_RXCSUM;
 	dev->features |= NETIF_F_RXCSUM;
+	/*
+	 * Метку 802.1Q стек отдаёт и принимает отдельно от данных: в режиме
+	 * роутера она едет в дескрипторе, в старом режиме драйвер сам кладёт
+	 * её в кадр (rtl819x_start_xmit). Как у донора DIR-842.
+	 */
+	dev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX;
+	/*
+	 * Аппаратный NAT: NETIF_F_HW_TC — билет входа для tc_can_offload()
+	 * и метка «этот netdev умеет offload» для ядра. Ядро само решает,
+	 * спрашивать ли нас: только когда flowtable объявлена `flags offload`.
+	 */
+	dev->hw_features |= NETIF_F_HW_TC;
+	dev->features |= NETIF_F_HW_TC;
 	dev->min_mtu = ETH_ZLEN;
 	dev->max_mtu = eth->soc->max_mtu;
 	dev->watchdog_timeo = 5 * HZ;
@@ -1538,9 +2062,12 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	ret = devm_register_netdev(&pdev->dev, dev);
 	if (ret)
 		return ret;
+	rtl819x_dev = dev;
 
 	proc_create_single("rtl819x_spa", 0444, NULL, rtl819x_spa_pokaz);
 	proc_create("rtl819x_gnezda", 0644, NULL, &rtl819x_gnezda_ops);
+	proc_create("rtl819x_router", 0644, NULL, &rtl819x_router_ops);
+	proc_create("rtl819x_hs", 0644, NULL, &rtl819x_hs_ops);
 
 	netdev_info(dev, "Realtek RTL819x Ethernet at %pR, irq %d\n",
 		    platform_get_resource(pdev, IORESOURCE_MEM, 0), eth->irq);

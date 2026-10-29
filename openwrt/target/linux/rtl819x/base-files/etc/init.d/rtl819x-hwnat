@@ -1,0 +1,75 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# RX23302, часть 1 из 2: управление nft-сниппетом «eth0 в программную
+# flowtable» по галке LuCI «Flow offloading: Hardware»
+# (uci firewall.@defaults[0].flow_offloading_hw).
+#
+# hw=0 (софт, по умолчанию): сниппет ЕСТЬ — fw4 втягивает eth0 в ft
+#                            (замерено 850–880 Мбит/с).
+# hw=1 (аппаратный NAT):     сниппет УДАЛЁН — с `flags offload` объявление
+#                            без флага роняет nft, и fw4 уходит в deny-all.
+#
+# Стартует ДО firewall (17 < 19): fw4 при загрузке обязан увидеть уже
+# правильный набор сниппетов. Гейты ASIC (router mode/hwnat) включает
+# rtl819x-hwnat-gate ПОСЛЕ сети — router mode до ifup ломает PVID свитча.
+
+START=17
+USE_PROCD=1
+
+SNIPPET="/usr/share/nftables.d/table-post/20-rx23302-flowtable-eth0.nft"
+ROM_SNIPPET="/rom$SNIPPET"
+
+log() { logger -t rtl819x-hwnat "$@"; }
+
+snippet_ensure() {
+	local want="$1" changed=0
+
+	mkdir -p "$(dirname "$SNIPPET")"
+	if [ "$want" = "1" ]; then
+		if [ ! -f "$SNIPPET" ]; then
+			# в образе файл лежит в /rom (squashfs) — копируем оттуда
+			if [ -f "$ROM_SNIPPET" ]; then
+				cp "$ROM_SNIPPET" "$SNIPPET"
+			else
+				cat > "$SNIPPET" <<-'EOF'
+				flowtable ft {
+					hook ingress priority 0;
+					devices = { "eth0" };
+				}
+				EOF
+			fi
+			changed=1
+		fi
+	else
+		if [ -f "$SNIPPET" ]; then
+			rm -f "$SNIPPET"
+			changed=1
+		fi
+	fi
+	return $changed
+}
+
+apply() {
+	local hw=0 snip changed
+	[ "$(uci -q get firewall.@defaults[0].flow_offloading_hw)" = "1" ] && hw=1
+	# сниппет нужен ТОЛЬКО в софт-режиме (hw=0)
+	if [ "$hw" = "1" ]; then snip=0; else snip=1; fi
+	# ★ snippet_ensure возвращает 1 при ИЗМЕНЕНИИ (не 0!) — не путать с
+	# успехом в `if`; берём код явно
+	snippet_ensure "$snip"; changed=$?
+	if [ "$changed" = "1" ]; then
+		# runtime: пересобрать fw4 сразу; на загрузке этот вызов может
+		# вернуть ошибку (fw4 ещё не стартовал) — это нормально, S19
+		# применит ruleset уже с правильным набором сниппетов
+		/etc/init.d/firewall reload >/dev/null 2>&1
+		log "сниппет eth0: $([ "$snip" = "1" ] && echo есть || echo убран) (hw=$hw)"
+	fi
+}
+
+start_service() { apply; }
+reload_service() { apply; }
+
+service_triggers() {
+	procd_add_reload_trigger firewall
+}
