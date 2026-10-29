@@ -608,33 +608,6 @@ int rtl819x_hwnat_setup_tc(struct net_device *dev, enum tc_setup_type type,
 
 /* ---- indr: eth0.8 / eth0.9 / br-lan не имеют своего ndo_setup_tc ---------- */
 
-/* Наше ли это устройство: eth0, VLAN поверх него или мост с ним внутри.
- * Образец indr-привязки — sfc/tc_bindings.c: flow_indr_block_cb_alloc +
- * flow_block_cb_add, снятие — flow_indr_block_cb_remove. */
-static bool hwnat_dev_is_ours(struct net_device *dev)
-{
-	struct net_device *eth = rtl819x_eth_dev();
-	struct net_device *lower;
-	struct list_head *iter;
-
-	if (!eth || !dev)
-		return false;
-	if (dev == eth)
-		return true;
-	if (is_vlan_dev(dev))
-		return vlan_dev_real_dev(dev) == eth;
-	if (netif_is_bridge_master(dev)) {
-		netdev_for_each_lower_dev(dev, lower, iter) {
-			if (lower == eth)
-				return true;
-			if (is_vlan_dev(lower) &&
-			    vlan_dev_real_dev(lower) == eth)
-				return true;
-		}
-	}
-	return false;
-}
-
 static int hwnat_indr_cb(struct net_device *dev, struct Qdisc *sch,
 			 void *indr_block_cb_priv,
 			 enum tc_setup_type type, void *type_data,
@@ -655,8 +628,13 @@ static int hwnat_indr_cb(struct net_device *dev, struct Qdisc *sch,
 
 	switch (f->command) {
 	case FLOW_BLOCK_BIND:
-		if (!hwnat_dev_is_ours(dev))
-			return -EOPNOTSUPP;
+		/* ★ Принимаем ЛЮБОЕ устройство, не только своё: fw4 в режиме
+		 * flow_offloading_hw кладёт в ft все порты зон (br-lan, eth0.8,
+		 * eth0.9, wlan0/1). Отказ хотя бы на одном роняет транзакцию nft,
+		 * и fw4 уходит в deny-all (проверено: связь пропадала целиком).
+		 * Потоки с «чужих» устройств (wlan) ASIC всё равно не увидит —
+		 * они просто останутся в софт-пути, а строки NAPT по ним не
+		 * помешают (промах трапает в CPU). */
 		block_cb = flow_indr_block_cb_alloc(hwnat_block_cb, dev, dev,
 						    NULL, f, dev, sch, data,
 						    indr_block_cb_priv, cleanup);
