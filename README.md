@@ -2,12 +2,11 @@
 
 [Русский](#русский) · [English](#english)
 
-> Текущий релиз — **0.1.2**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Текущий релиз — **0.2.0**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Новое в 0.2.0: **аппаратный NAT RTL8197F** — включается галкой LuCI «Flow offloading: Hardware»
+> (тестовый режим, по умолчанию — программный офлоад); честные замеры скорости — [ниже](#скорость-честные-замеры).
 > Новое в 0.1.2: **установка без разборки и UART** — кнопкой Reset и TFTP ([docs/install-tftp.md](docs/install-tftp.md)),
 > кнопка Reset в OpenWrt, светодиоды портов и Wi-Fi 2,4 ГГц.
->
-> В ветке для **0.2.0 (тестовая)**: **аппаратный NAT RTL8197F** — экспериментально, по галке; честные замеры
-> скорости — [ниже](#скорость-честные-замеры).
 
 ---
 
@@ -50,12 +49,12 @@ OpenWrt не поддерживается.
 | ✅ Возврат на заводскую прошивку | одной командой, без UART — [docs/recovery.md](docs/recovery.md) |
 | ✅ Установка без UART | кнопка Reset при включении + TFTP — [docs/install-tftp.md](docs/install-tftp.md) |
 | ✅ Кнопка Reset | коротко — перезагрузка, держать 5+ с — сброс настроек |
-| ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность), 2.4G |
+| ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность); 5G — горит и мигает от трафика (тест). **2.4G LED в 0.2.0 не горит** — см. «Что не работает» |
 | ⚠️ Режим точки доступа | работает, настраивается вручную |
 
 ### Скорость: честные замеры
 
-Один и тот же стенд (Небула ↔ RX23302), один инструмент (`iperf3`, TCP, 3–8 прогонов по 10 с),
+Один и тот же стенд (ПК ↔ RX23302), один инструмент (`iperf3`, TCP, 3–8 прогонов по 10 с),
 один и тот же провод — цифры сравнимы. Замеры сделаны на работающем роутере, во время замеров через него
 шёл обычный домашний трафик (включая ТВ-приставку), поэтому вилки шире, чем на пустом стенде.
 
@@ -81,7 +80,8 @@ OpenWrt не поддерживается.
   при коллизии строк NAPT возможны просадки (см. «Скорость: честные замеры»); смена режима — через перезагрузку.
 - **Режим точки доступа (мост)**: аппаратный NAT там не применим — сервис сам отказывается его включать,
   сеть не ломается.
-- Светодиоды **5G** и **Status** — не заведены (0.1.3).
+- **2.4G LED в 0.2.0 не горит** (регрессия против 0.1.2): причина найдена — вендорский LED-регистр 8197G
+  (`LEDCFG`) при инициализации остаётся нулевым; в работе. **Status** — пин найден (GPIO H1), заводится в 0.1.3.
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
 - **Двойники** — Transservice **TS-7322** (Ростелеком), Transservice **TS-7022** (МТС), **Билайн RX-22302** —
@@ -182,7 +182,7 @@ the Reset button works in OpenWrt (short press = reboot, 5+ s = factory reset); 
 keeping settings; an interrupted upgrade falls back to stock firmware, not a brick) and a verified
 return to stock: `mtd erase kernel && reboot` ([docs/recovery.md](docs/recovery.md)).
 
-**Speed: honest numbers.** Same bench (Nebula ↔ RX23302), same tool (`iperf3`, TCP, 3–8 runs of
+**Speed: honest numbers.** Same bench (host PC ↔ RX23302), same tool (`iperf3`, TCP, 3–8 runs of
 10 s), same cable — the numbers are comparable. Measured on the live router while normal home traffic
 (including a TV set-top box) was flowing, so the spread is wider than on an idle bench.
 
@@ -202,7 +202,9 @@ drops that flow to the software path — hence the rare ~430–440 Mbit/s runs; 
 returns. Switching the NAT mode applies via a reboot (live switching is unstable). Wi-Fi and a real ISP
 link will be slower than this wired bench.
 
-**Not yet:** 5G and Status LEDs (0.1.3), noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+**Not yet:** 2.4G LED is dark in 0.2.0 (regression vs 0.1.2: the vendor LEDCFG register of the 8197G stays
+zero at init; being fixed), Status LED pin found (GPIO H1, shipping in 0.1.3), noisy Wi-Fi driver log,
+console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
 **Hardware NAT is a test mode (0.2.0-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
 can cause dips (see "Speed: honest numbers"); switching the mode needs a reboot. In access-point (bridge)
 mode hardware NAT does not apply — the service refuses it and leaves the bridge intact.
