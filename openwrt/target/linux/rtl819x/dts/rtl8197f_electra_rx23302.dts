@@ -39,6 +39,25 @@
 	};
 };
 
+/*
+ * Светодиод Status — линия H1 (gpio1 бит 25), активный низкий.
+ * Найден на стоке (структура gpio_led: wifi2.4=33, wifi5=100, status=57,
+ * trigger=timer) и проверен руками 29.10.2026: 0 на линии = горит.
+ * 2.4G LED там же ждёт своего часа (пин E1 не отдаётся без pinmux).
+ */
+/ {
+	leds {
+		compatible = "gpio-leds";
+		status = "okay";
+
+		status_led: status {
+			label = "green:status";
+			gpios = <&gpio1 25 GPIO_ACTIVE_LOW>;
+			default-state = "on";
+		};
+	};
+};
+
 &gpio0 {
 	status = "okay";
 };
