@@ -141,7 +141,10 @@ int rtl865x_asic_write_entry(u32 type, u32 idx, const void *entry, bool force)
 	/* Заморозить поиск на время записи (вендорский RTL819X_TLU_CHECK). */
 	REG32(SWTCR0) |= EN_STOP_TLU;
 	while (!(REG32(SWTCR0) & STOP_TLU_READY))
-		if (++g > ASIC_POLL_MAX) { rc = -ETIMEDOUT; goto out; }
+		if (++g > ASIC_POLL_MAX) {
+			rc = -ETIMEDOUT;
+			goto out;
+		}
 
 	rc = asic_wait_action_done();
 	if (rc)
@@ -657,8 +660,8 @@ static int gw_prog(struct seq_file *m, void *v)
 	/* 8. базовые строки L2: broadcast (гнёзда + CPU) и CPU-MAC-ловушка
 	 * (промахи route/ARP попадают в процессор через неё), обе FID */
 	{
-		static const u8 BC[6]  = { 0xff,0xff,0xff,0xff,0xff,0xff };
-		static const u8 CPM[6] = { 0x00,0x00,0x0a,0x00,0x00,0x0f };
+		static const u8 BC[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+		static const u8 CPM[6] = { 0x00, 0x00, 0x0a, 0x00, 0x00, 0x0f };
 		u32 bc_mbr = 0x1f;	/* гнёзда 0-4 */
 		u32 ext    = 0x4;	/* порт процессора 8 */
 
@@ -753,9 +756,11 @@ static int gw_prog(struct seq_file *m, void *v)
 	seq_printf(m, "  NH0    w0=%08x (dstVid=%u arp=%u)\n", rb[0],
 		   (rb[0] >> 5) & 0x7, (rb[0] >> 11) & 0x3ff);
 	rtl865x_asic_read_entry(ASIC_TYPE_NETIF, 0, rb);
-	if (!(rb[0] & 1) || ((rb[0] >> 1) & 0xFFF) != RTL865X_VID_LAN) ok = 0;
+	if (!(rb[0] & 1) || ((rb[0] >> 1) & 0xFFF) != RTL865X_VID_LAN)
+		ok = 0;
 	rtl865x_asic_read_entry(ASIC_TYPE_NETIF, 1, rb);
-	if (!(rb[0] & 1) || ((rb[0] >> 1) & 0xFFF) != RTL865X_VID_WAN) ok = 0;
+	if (!(rb[0] & 1) || ((rb[0] >> 1) & 0xFFF) != RTL865X_VID_WAN)
+		ok = 0;
 	seq_printf(m, "ИТОГ %s (каркас %s; MSCR %08x -> %08x SWTCR0=%08x SWTCR1=%08x)\n",
 		   ok ? "PASS" : "FAIL", ok ? "жив" : "не-жив",
 		   mscr0, mscr1, REG32(SWTCR0), REG32(SWTCR1));
