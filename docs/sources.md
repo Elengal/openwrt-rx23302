@@ -31,6 +31,10 @@ This is an engineering provenance review, not legal advice.
 | LZMA-загрузчик ядра | `image/lzma-loader/` | OpenWrt (Gabor Juhos) + Weijie Gao | GPL-2.0 |
 | Упаковщик образа `cvimg` (KE32) | `tools/cvimg/` | Weijie Gao, по мотивам утилиты Realtek | GPL-2.0 |
 | Ethernet-контроллер 8197F | `files-6.18/drivers/net/ethernet/rtl819x_eth.*` | **написан в этом проекте**, значения регистров сверены с Realtek SDK (`rtl819x_swNic.c`, GPL) | GPL-2.0-only |
+| Аппаратный NAT: движок таблиц | `files-6.18/drivers/net/ethernet/rtl865x_asichal.*` | **порт** [ADCDS/openwrt-dlink-dir842-r1](https://github.com/ADCDS/openwrt-dlink-dir842-r1) (GPL-2.0): реверс-инжиниринг таблиц ASIC (L2/ARP/L3/NETIF/EXTIP/NAPT/nexthop) по стоку 3.10.90 и вендорскому SDK; адаптирован нами (раскладка платы, без PPPoE) | GPL-2.0 |
+| Аппаратный NAT: conntrack → NAPT | `files-6.18/drivers/net/ethernet/rtl819x_hwnat.*` | **порт** ADCDS (GPL-2.0); переработан под штатный flowtable-интерфейс ядра 6.18 (`ndo_setup_tc`/`TC_SETUP_FT`/`FLOW_CLS_*` вместо downstream `ndo_flow_offload`) и таймауты ядра | GPL-2.0 |
+| Общие регистры свитча | `files-6.18/drivers/net/ethernet/rtl819x_regs.h` | **этот проект** (значения — вендорский SDK) | GPL-2.0-only |
+| Переключатель режимов NAT (init-скрипты, nft-сниппет, uci-defaults) | `base-files/etc/init.d/rtl819x-hwnat*`, `base-files/usr/share/nftables.d/table-post/20-rx23302-flowtable-eth0.nft`, `base-files/etc/uci-defaults/05_enable_flow_offloading` | **этот проект** | GPL-2.0-only |
 | Device tree RX23302 | `dts/rtl8197f_electra_rx23302.dts` | **этот проект**, по живому устройству | GPL-2.0 |
 | Скрипты образа | `scripts/rx23302-full-image.py`, `scripts/rx23302-tftp-image.py`, `scripts/rtl819x-rootfs-chksum.py` | **этот проект**; формат TFTP-образа — по разбору заводского загрузчика | GPL-2.0-only |
 | base-files (netifd/wifi-скрипты, 02_network, uci-defaults); утилита `rtlmib` — пакет из исходника | `base-files/`, `package/utils/rtlmib/` | **этот проект**; `rtl8192cd.sh` по мотивам [sowarden/hh71vm-openwrt](https://github.com/sowarden/hh71vm-openwrt) (`8881e78`) | GPL-2.0 |
@@ -89,10 +93,14 @@ This is an engineering provenance review, not legal advice.
 ## Доноры, которые изучались / Reference projects
 
 - [choryuidentify/openwrt-rtl8197f](https://github.com/choryuidentify/openwrt-rtl8197f) — исходный порт RTL8197F на OpenWrt (ядро 4.14).
-- [Putpocket/iptime-a2004mu-openwrt](https://github.com/Putpocket/iptime-a2004mu-openwrt) — RTL8197F + RTL8367RB на ядре 6.18; CPU-тег, аппаратный NAT.
+- [Putpocket/iptime-a2004mu-openwrt](https://github.com/Putpocket/iptime-a2004mu-openwrt) — RTL8197F + RTL8367RB на ядре 6.18; CPU-тег и аппаратный NAT — **изучались** (идеи CPU-тега для router mode), код не копировался: наш hw NAT — порт ADCDS.
 - [sowarden/hh71vm-openwrt](https://github.com/sowarden/hh71vm-openwrt) — RTL8197FS + RTL8812FE (наша пара радио), halmac 1.6.6.6.
 - [tobyw121/Openwrt_RTL](https://github.com/tobyw121/Openwrt_RTL) — Xiaomi RD05 (RTL8197FH + RTL8367D, плата-близнец), исходники из GPL-архивов.
 - [ADCDS/openwrt-dlink-dir842-r1](https://github.com/ADCDS/openwrt-dlink-dir842-r1) — D-Link DIR-842, 802.11w в старом драйвере.
   **Источник аппаратного NAT (0.2.0):** реверс-инжиниринг ASIC-таблиц RTL865xC/8197F и протокола NAPT
-  (`rtl865x_asichal.c`, `rtl819x_hwnat.c`, GPL-2.0). Наш порт адаптирован к штатному flowtable-интерфейсу
-  ядра 6.18 (`ndo_setup_tc`/`TC_SETUP_FT` вместо downstream `ndo_flow_offload`) и к раскладке этой платы.
+  (`rtl865x_asichal.c`, `rtl819x_hwnat.c`, SPDX GPL-2.0). Взято ~2700 строк; наш перенос — не копия
+  байт в байт, изменения: API ядра (`ndo_setup_tc`/`TC_SETUP_FT`/`FLOW_CLS_REPLACE|DESTROY|STATS` вместо
+  downstream `ndo_flow_offload`), VID 8/9 и раскладка гнёзд этой платы, ARP-окно подключённой WAN-сети,
+  `dstVid` в nexthop = индекс netif (в доноре совпадал с VID случайно), без PPPoE. Подробности — в истории
+  коммитов ветки (bf613f0…386bd37).
+  Наш проект — GPL-2.0-only, донор — GPL-2.0: совместимо; заголовки SPDX в наших файлах сохранены.
