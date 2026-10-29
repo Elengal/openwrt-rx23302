@@ -20,8 +20,19 @@
 [ "$(board_name)" = "electra,rx23302" ] || exit 0
 
 uci -q get firewall.@defaults[0] >/dev/null || exit 0
+
+# По умолчанию — программный офлоад (850–880 Мбит/с, проверено). Аппаратный
+# NAT включается галкой LuCI «Flow offloading: Hardware» (или uci set
+# firewall.@defaults[0].flow_offloading_hw=1) — сервис rtl819x-hwnat сам
+# поднимет router mode, гейт и каркас ASIC (замерено 926–929 Мбит/с, CPU
+# 90–100% idle). Дефолт аппаратного NAT — после обкатки, по слову хозяина.
 uci set firewall.@defaults[0].flow_offloading='1'
-uci set firewall.@defaults[0].flow_offloading_hw='1'
+uci set firewall.@defaults[0].flow_offloading_hw='0'
 uci commit firewall
+
+# включить сервисы-переключатели: сниппет до firewall (17 < 19),
+# гейты ASIC после сети (95 > 20)
+/etc/init.d/rtl819x-hwnat enable
+/etc/init.d/rtl819x-hwnat-gate enable
 
 exit 0

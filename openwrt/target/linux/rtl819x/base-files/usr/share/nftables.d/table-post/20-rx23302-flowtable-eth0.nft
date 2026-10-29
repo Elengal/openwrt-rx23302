@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# RX23302: втянуть eth0 в программную flowtable (авто-включение fw4).
+#
+# fw4 кладёт в "ft" только устройства зон (br-lan, eth0.8), поэтому
+# offloaded-поток стартует лишь после слоя 802.1Q. На eth0 кадр уходит в
+# известный поток сразу из драйвера. Замерено 28.10.2026 на стенде:
+# 766/703 -> 850-876 Мбит/с (LAN->WAN / WAN->LAN).
+#
+# ⚠ НЕСОВМЕСТИМ с аппаратным NAT: сервис /etc/init.d/rtl819x-hwnat удаляет
+# этот файл, когда включена галка «Flow offloading: Hardware», и возвращает
+# обратно при выключении. С `flags offload` объявление ft БЕЗ флага роняет
+# транзакцию nft («Not supported») — fw4 уходит в deny-all.
+flowtable ft {
+	hook ingress priority 0;
+	devices = { "eth0" };
+}
