@@ -3,11 +3,12 @@ Subject: [PATCH] net: ethernet: register RTL819x driver
 
 --- a/drivers/net/ethernet/Makefile
 +++ b/drivers/net/ethernet/Makefile
-@@ -80,6 +80,7 @@
+@@ -80,6 +80,8 @@
  obj-$(CONFIG_NET_VENDOR_QLOGIC) += qlogic/
  obj-$(CONFIG_NET_VENDOR_QUALCOMM) += qualcomm/
  obj-$(CONFIG_NET_VENDOR_REALTEK) += realtek/
-+obj-$(CONFIG_NET_RTL819X) += rtl819x_eth.o
++obj-$(CONFIG_NET_RTL819X) += rtl819x.o
++rtl819x-y := rtl819x_eth.o rtl865x_asichal.o rtl819x_hwnat.o
  obj-$(CONFIG_NET_VENDOR_RENESAS) += renesas/
  obj-$(CONFIG_NET_VENDOR_RDC) += rdc/
  obj-$(CONFIG_NET_VENDOR_ROCKER) += rocker/

@@ -31,6 +31,7 @@
 #include <net/ip.h>
 
 #include "rtl819x_eth.h"
+#include "rtl819x_hwnat.h"
 
 #define RTL819X_DRV_NAME	"rtl819x-eth"
 
@@ -1280,6 +1281,31 @@ static void rtl819x_router_set(bool on)
 		rtl_sw_r(0xBB80414C), rtl_sw_r(RTL_PVCR(0)));
 }
 
+/* ---- экспорт для rtl819x_hwnat.c ---------------------------------------- */
+
+bool rtl819x_router_mode(void)
+{
+	return READ_ONCE(rtl819x_router);
+}
+
+/* маска гнезда, в котором живёт MAC клиента (по таблице, выученной на RX);
+ * 0 = не знаем — вызывающий возьмёт запасное значение */
+u32 rtl819x_lan_jack_mask(const u8 *mac)
+{
+	struct rtl819x_fdb *e = &rtl819x_fdb[rtl819x_fdb_hash(mac)];
+	unsigned int port = READ_ONCE(e->port);
+
+	if (port && port != RTL_WAN_GNEZDO && port <= 4 &&
+	    ether_addr_equal(e->mac, mac))
+		return BIT(port);
+	return 0;
+}
+
+struct net_device *rtl819x_eth_dev(void)
+{
+	return rtl819x_dev;
+}
+
 static int rtl819x_router_pokaz(struct seq_file *m, void *v)
 {
 	unsigned int i;
@@ -1902,6 +1928,8 @@ static const struct net_device_ops rtl819x_netdev_ops = {
 	.ndo_set_mac_address	= rtl819x_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_tx_timeout		= rtl819x_tx_timeout,
+	/* аппаратный NAT: flowtable с флагом offload предлагает потоки */
+	.ndo_setup_tc		= rtl819x_hwnat_setup_tc,
 };
 
 /* ---- описание чипов ---------------------------------------------------- */
@@ -2015,6 +2043,13 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	 * её в кадр (rtl819x_start_xmit). Как у донора DIR-842.
 	 */
 	dev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX;
+	/*
+	 * Аппаратный NAT: NETIF_F_HW_TC — билет входа для tc_can_offload()
+	 * и метка «этот netdev умеет offload» для ядра. Ядро само решает,
+	 * спрашивать ли нас: только когда flowtable объявлена `flags offload`.
+	 */
+	dev->hw_features |= NETIF_F_HW_TC;
+	dev->features |= NETIF_F_HW_TC;
 	dev->min_mtu = ETH_ZLEN;
 	dev->max_mtu = eth->soc->max_mtu;
 	dev->watchdog_timeo = 5 * HZ;

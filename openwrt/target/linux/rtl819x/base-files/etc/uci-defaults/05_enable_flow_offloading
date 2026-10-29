@@ -4,8 +4,16 @@
 # Software flow offloading moves established connections to the kernel's fast
 # path (nftables flowtable), bypassing most of the firewall per packet.
 # Measured on the board 15.10.2026: TV stream connections land in the
-# flowtable (OFFLOAD in conntrack), nothing else changes. Hardware offload
-# (flow_offloading_hw) needs the RTL8197F NAT engine, not ported yet.
+# flowtable (OFFLOAD in conntrack), nothing else changes.
+#
+# flow_offloading_hw (29.10.2026): the hardware NAT engine of the RTL8197F is
+# ported from the ADCDS DIR-842 driver (rtl865x_asichal.c + rtl819x_hwnat.c).
+# The flag makes fw4 declare its flowtable with `flags offload`, so the kernel
+# offers established flows to the driver (ndo_setup_tc/TC_SETUP_FT). The
+# driver itself gates row programming behind /sys/module/rtl819x/parameters/hwnat
+# (default 0) AND router mode (/proc/rtl819x_router=1): with the gate closed
+# every offer is declined and flows stay on the software path exactly as
+# before, so this setting is safe to ship even when the gate is off.
 
 . /lib/functions.sh
 
@@ -13,6 +21,7 @@
 
 uci -q get firewall.@defaults[0] >/dev/null || exit 0
 uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading_hw='1'
 uci commit firewall
 
 exit 0
