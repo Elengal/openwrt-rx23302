@@ -5,6 +5,9 @@
 > Текущий релиз — **0.1.2**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
 > Новое в 0.1.2: **установка без разборки и UART** — кнопкой Reset и TFTP ([docs/install-tftp.md](docs/install-tftp.md)),
 > кнопка Reset в OpenWrt, светодиоды портов и Wi-Fi 2,4 ГГц.
+>
+> В ветке для **0.2.0 (тестовая)**: **аппаратный NAT RTL8197F** — экспериментально, по галке; честные замеры
+> скорости — [ниже](#скорость-честные-замеры).
 
 ---
 
@@ -41,6 +44,7 @@ OpenWrt не поддерживается.
 | ✅ Разделение WAN/LAN | VLAN 8/9 во внешнем коммутаторе, утечек LAN в WAN нет (проверено tcpdump) |
 | ✅ Коммутатор в LuCI | драйвер OpenWrt `rtl8367b` (swconfig) вместо закрытого SDK Realtek: вкладка «Сеть → Коммутатор», VLAN, состояние портов |
 | ✅ Программное ускорение NAT | flow offloading включён по умолчанию |
+| ✅ Аппаратный NAT (тест) | NAPT-движок RTL8197F: галка LuCI «Flow offloading: Hardware» (или `uci set firewall.@defaults[0].flow_offloading_hw=1`); 857–929 Мбит/с, CPU 90–100% idle. Только IPv4 TCP/UDP; IPv6 и ICMP — программно; таблица 1024 строки |
 | ✅ LuCI на русском | |
 | ✅ Обновление из LuCI / sysupgrade | `…-squashfs-sysupgrade.bin`, с сохранением настроек и без; оборванное обновление — не кирпич (см. ниже) |
 | ✅ Возврат на заводскую прошивку | одной командой, без UART — [docs/recovery.md](docs/recovery.md) |
@@ -49,9 +53,34 @@ OpenWrt не поддерживается.
 | ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность), 2.4G |
 | ⚠️ Режим точки доступа | работает, настраивается вручную |
 
+### Скорость: честные замеры
+
+Один и тот же стенд (Небула ↔ RX23302), один инструмент (`iperf3`, TCP, 3–8 прогонов по 10 с),
+один и тот же провод — цифры сравнимы. Замеры сделаны на работающем роутере, во время замеров через него
+шёл обычный домашний трафик (включая ТВ-приставку), поэтому вилки шире, чем на пустом стенде.
+
+| Прошивка | NAT | LAN→WAN | WAN→LAN | CPU | Когда замерено |
+|---|---|---|---|---|---|
+| Заводская `V1.24.137` | программный (аппаратный не включается: **0 строк NAPT**) | 724–748 | 791–809 | ~40% idle | 27–28.10.2026 |
+| Наша, программный офлоад | программный | 850–876 | 861–876 | 100% sirq | 29.10.2026 |
+| Наша, **аппаратный NAT** (тест) | **железо** | **857–900**, изредка ~430–440 | **846–863** (на чистом стенде до 929) | **90–100% idle** | 29.10.2026 |
+
+**Что это значит.** Заводская прошивка на этом железе не включает аппаратный NAT: 0 строк в NAPT-таблице,
+и весь гигабит идёт через один процессор (724–809 при ~40% простоя). Наш порт ставит эти строки и отдаёт
+трафик коммутатору: **857–929 Мбит/с при свободном процессоре** — на том же стенде, с тем же `iperf3`
+и той же методикой. Гигабит, за который платят, проходит почти целиком.
+
+**Честно о просадках.** Аппаратный NAT — тестовый режим: таблица NAPT на 1024 строки, и при коллизии
+отображения поток падает в программный путь (в замерах это редкие прогоны ~430–440 Мбит/с). Со временем
+эти строки освобождаются, и скорость возвращается. Смена режима NAT применяется перезагрузкой — включение
+на ходу нестабильно. Wi-Fi и реальный провайдер дадут меньше, чем проводной стенд.
+
 ### Что не работает или не проверено
 
-- **Аппаратный NAT** RTL8197F — не перенесён (планируется в 0.2.0).
+- **Аппаратный NAT — тестовый режим (0.2.0-test)**: не включён по умолчанию; IPv6 и ICMP через него не идут;
+  при коллизии строк NAPT возможны просадки (см. «Скорость: честные замеры»); смена режима — через перезагрузку.
+- **Режим точки доступа (мост)**: аппаратный NAT там не применим — сервис сам отказывается его включать,
+  сеть не ломается.
 - Светодиоды **5G** и **Status** — не заведены (0.1.3).
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
@@ -135,7 +164,10 @@ upstream OpenWrt; this is a standalone port.
 
 **Works:** 2.4 + 5 GHz Wi-Fi (WPA2, 802.11w, guest networks, TX power — all in LuCI), router
 mode (DHCP WAN, NAT, firewall), all ports, WAN/LAN separation by VLAN (no LAN→WAN leaks,
-verified with tcpdump), software flow offloading, LuCI. The switch runs on OpenWrt's GPL
+verified with tcpdump), software flow offloading, LuCI. **Hardware NAT (test):** the RTL8197F
+NAPT engine via the LuCI toggle "Flow offloading: Hardware" (or
+`uci set firewall.@defaults[0].flow_offloading_hw=1`): IPv4 TCP/UDP only, IPv6 and ICMP stay in
+software, 1024-row NAPT table. The switch runs on OpenWrt's GPL
 `rtl8367b` swconfig driver (not the closed Realtek SDK): LuCI "Network → Switch" tab,
 `swconfig dev switch0 show`, register window in `/sys/kernel/debug/switch/`. Ports: 0 = WAN,
 3 = LAN1, 4 = LAN2, 7 = CPU.
@@ -144,11 +176,36 @@ verified with tcpdump), software flow offloading, LuCI. The switch runs on OpenW
 `…-squashfs-tftp-factory.bin` over TFTP to 192.168.1.6 ([docs/install-tftp.md](docs/install-tftp.md));
 the Reset button works in OpenWrt (short press = reboot, 5+ s = factory reset); POWER/WAN/LAN1/LAN2/2.4G LEDs.
 
+**0.2.0 (test branch): RTL8197F hardware NAT** — experimental, enabled by a LuCI toggle; honest speed numbers below.
+
 **0.1.1:** sysupgrade / LuCI firmware upgrade (`…-squashfs-sysupgrade.bin`, with or without
 keeping settings; an interrupted upgrade falls back to stock firmware, not a brick) and a verified
 return to stock: `mtd erase kernel && reboot` ([docs/recovery.md](docs/recovery.md)).
 
-**Not yet:** RTL8197F hardware NAT (planned for 0.2.0), 5G and Status LEDs (0.1.3), noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+**Speed: honest numbers.** Same bench (Nebula ↔ RX23302), same tool (`iperf3`, TCP, 3–8 runs of
+10 s), same cable — the numbers are comparable. Measured on the live router while normal home traffic
+(including a TV set-top box) was flowing, so the spread is wider than on an idle bench.
+
+| Firmware | NAT | LAN→WAN | WAN→LAN | CPU | Measured |
+|---|---|---|---|---|---|
+| Stock `V1.24.137` | software (hardware NAT does **not** engage: **0 NAPT rows**) | 724–748 | 791–809 | ~40% idle | 27–28.10.2026 |
+| Ours, software offload | software | 850–876 | 861–876 | 100% sirq | 29.10.2026 |
+| Ours, **hardware NAT** (test) | **silicon** | **857–900**, occasionally ~430–440 | **846–863** (up to 929 on an idle bench) | **90–100% idle** | 29.10.2026 |
+
+**What it means.** The stock firmware does not engage hardware NAT on this hardware: zero NAPT rows —
+the whole gigabit rides on one CPU (724–809 at ~40% idle). This port writes the rows and hands the
+traffic to the switch: **857–929 Mbit/s with an idle CPU**, same bench, same `iperf3`, same method.
+The gigabit you pay for now passes almost entirely.
+
+**Honest caveats.** Hardware NAT is a test mode: the NAPT table has 1024 rows, and a hash collision
+drops that flow to the software path — hence the rare ~430–440 Mbit/s runs; rows age out and the speed
+returns. Switching the NAT mode applies via a reboot (live switching is unstable). Wi-Fi and a real ISP
+link will be slower than this wired bench.
+
+**Not yet:** 5G and Status LEDs (0.1.3), noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+**Hardware NAT is a test mode (0.2.0-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
+can cause dips (see "Speed: honest numbers"); switching the mode needs a reboot. In access-point (bridge)
+mode hardware NAT does not apply — the service refuses it and leaves the bridge intact.
 
 **Look-alikes** — Transservice **TS-7322** (Rostelecom), Transservice **TS-7022** (MTS), **Beeline RX-22302** —
 reportedly the same hardware, but **untested**. Compare the first UART boot line first (ours:

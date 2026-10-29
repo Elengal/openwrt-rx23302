@@ -93,3 +93,6 @@ This is an engineering provenance review, not legal advice.
 - [sowarden/hh71vm-openwrt](https://github.com/sowarden/hh71vm-openwrt) — RTL8197FS + RTL8812FE (наша пара радио), halmac 1.6.6.6.
 - [tobyw121/Openwrt_RTL](https://github.com/tobyw121/Openwrt_RTL) — Xiaomi RD05 (RTL8197FH + RTL8367D, плата-близнец), исходники из GPL-архивов.
 - [ADCDS/openwrt-dlink-dir842-r1](https://github.com/ADCDS/openwrt-dlink-dir842-r1) — D-Link DIR-842, 802.11w в старом драйвере.
+  **Источник аппаратного NAT (0.2.0):** реверс-инжиниринг ASIC-таблиц RTL865xC/8197F и протокола NAPT
+  (`rtl865x_asichal.c`, `rtl819x_hwnat.c`, GPL-2.0). Наш порт адаптирован к штатному flowtable-интерфейсу
+  ядра 6.18 (`ndo_setup_tc`/`TC_SETUP_FT` вместо downstream `ndo_flow_offload`) и к раскладке этой платы.
