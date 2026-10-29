@@ -14,7 +14,7 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-. "$HERE/versions.mk.sh"
+. "$HERE/versions.sh"
 
 BUILD=${1:-$HERE/build}
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
@@ -29,11 +29,23 @@ fi
 cd "$BUILD"
 git checkout -q "$OPENWRT_COMMIT"
 
-if [ ! -f .rx23302-applied ]; then
+# Отпечаток порта: содержимое openwrt/ + патч. Меняется хоть байт -
+# наложение повторяется, иначе сборка молча взяла бы старьё после
+# обновления этого репозитория.
+STAMP=$( (cd "$HERE" && find openwrt -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null; \
+	sha256sum "$HERE/openwrt-upstream.patch") | sha256sum | cut -d' ' -f1)
+
+if [ ! -f .rx23302-applied ] || [ "$(cat .rx23302-applied)" != "$OPENWRT_COMMIT:$STAMP" ]; then
 	say "apply openwrt/ overlay + openwrt-upstream.patch"
+	# Снести наложенное прошлой сборки. Кэш в build_dir/staging_dir -
+	# в gitignore, git clean его не трогает: пересборка остаётся быстрой.
+	git reset --hard -q HEAD
+	git clean -fdq
 	cp -a "$HERE/openwrt/." .
 	git apply "$HERE/openwrt-upstream.patch"
-	echo "$OPENWRT_COMMIT" > .rx23302-applied
+	echo "$OPENWRT_COMMIT:$STAMP" > .rx23302-applied
+else
+	say "порт не менялся - наложение пропущено"
 fi
 
 say "feeds: luci $FEED_LUCI_COMMIT, packages $FEED_PACKAGES_COMMIT"
