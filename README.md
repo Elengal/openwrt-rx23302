@@ -2,7 +2,10 @@
 
 [Русский](#русский) · [English](#english)
 
-> Текущий релиз — **0.2.0**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Текущий релиз — **0.2.1**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Новое в 0.2.1: **свой MAC у каждой коробки** — eth0 читает заводской адрес из таблицы hwconfig во флеше
+> (в 0.2.0 все прошитые роутеры делили один `02:E0:4C:81:96:C1` — коллизии у соседей по сегменту);
+> VLAN и Wi-Fi наследуют его же. Аппаратному NAT корректный MAC обязателен.
 > Новое в 0.2.0: **аппаратный NAT RTL8197F** — включается галкой LuCI «Flow offloading: Hardware»
 > (тестовый режим, по умолчанию — программный офлоад); честные замеры скорости — [ниже](#скорость-честные-замеры).
 > Новое в 0.1.2: **установка без разборки и UART** — кнопкой Reset и TFTP ([docs/install-tftp.md](docs/install-tftp.md)),
@@ -49,7 +52,8 @@ OpenWrt не поддерживается.
 | ✅ Возврат на заводскую прошивку | одной командой, без UART — [docs/recovery.md](docs/recovery.md) |
 | ✅ Установка без UART | кнопка Reset при включении + TFTP — [docs/install-tftp.md](docs/install-tftp.md) |
 | ✅ Кнопка Reset | коротко — перезагрузка, держать 5+ с — сброс настроек |
-| ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность); 5G — горит и мигает от трафика (тест). **2.4G LED в 0.2.0 не горит** — см. «Что не работает» |
+| ✅ MAC устройства | eth0 читает заводской адрес из таблицы hwconfig во флеше (у каждой коробки свой); VLAN и Wi-Fi наследуют; стабильный между перезагрузками |
+| ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность); 5G — горит и мигает от трафика (тест). **2.4G LED в 0.2.1 не горит** — см. «Что не работает» |
 | ⚠️ Режим точки доступа | работает, настраивается вручную |
 
 ### Скорость: честные замеры
@@ -63,6 +67,8 @@ OpenWrt не поддерживается.
 | Заводская `V1.24.137` | программный (аппаратный не включается: **0 строк NAPT**) | 724–748 | 791–809 | ~40% idle | 27–28.10.2026 |
 | Наша, программный офлоад | программный | 850–876 | 861–876 | 100% sirq | 29.10.2026 |
 | Наша, **аппаратный NAT** (тест) | **железо** | **857–900**, изредка ~430–440 | **846–863** (на чистом стенде до 929) | **90–100% idle** | 29.10.2026 |
+| Наша **0.2.1**, программный офлоад | программный | 759–890 | — (первичные прогоны) | — | 30.10.2026 |
+| Наша **0.2.1**, **аппаратный NAT** + стресс | **железо** | 845–892; 30 мин × 8 потоков = **145 ГБ без сбоев** | — | 90–100% idle | 30.10.2026 |
 
 **Что это значит.** Заводская прошивка на этом железе не включает аппаратный NAT: 0 строк в NAPT-таблице,
 и весь гигабит идёт через один процессор (724–809 при ~40% простоя). Наш порт ставит эти строки и отдаёт
@@ -76,11 +82,11 @@ OpenWrt не поддерживается.
 
 ### Что не работает или не проверено
 
-- **Аппаратный NAT — тестовый режим (0.2.0-test)**: не включён по умолчанию; IPv6 и ICMP через него не идут;
+- **Аппаратный NAT — тестовый режим (0.2.1-test)**: не включён по умолчанию; IPv6 и ICMP через него не идут;
   при коллизии строк NAPT возможны просадки (см. «Скорость: честные замеры»); смена режима — через перезагрузку.
 - **Режим точки доступа (мост)**: аппаратный NAT там не применим — сервис сам отказывается его включать,
   сеть не ломается.
-- **2.4G LED в 0.2.0 не горит** (регрессия против 0.1.2): причина найдена — вендорский LED-регистр 8197G
+- **2.4G LED в 0.2.1 не горит** (регрессия против 0.1.2): причина найдена — вендорский LED-регистр 8197G
   (`LEDCFG`) при инициализации остаётся нулевым; в работе. **Status** — пин найден (GPIO H1), заводится в 0.1.3.
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
@@ -133,7 +139,7 @@ cd openwrt-rx23302
 
 Готовые образы: `build/bin/targets/rtl819x/rtl8197f/openwrt-rtl819x-rtl8197f-electra_rx23302-squashfs-{tftp-factory,full,sysupgrade}.bin`.
 
-`build.sh` клонирует OpenWrt на закреплённом коммите ([versions.mk.sh](versions.mk.sh)),
+`build.sh` клонирует OpenWrt на закреплённом коммите ([versions.sh](versions.sh)),
 накладывает каталог [`openwrt/`](openwrt/) и [`openwrt-upstream.patch`](openwrt-upstream.patch),
 закрепляет фиды и собирает.
 
@@ -176,6 +182,10 @@ software, 1024-row NAPT table. The switch runs on OpenWrt's GPL
 `…-squashfs-tftp-factory.bin` over TFTP to 192.168.1.6 ([docs/install-tftp.md](docs/install-tftp.md));
 the Reset button works in OpenWrt (short press = reboot, 5+ s = factory reset); POWER/WAN/LAN1/LAN2/2.4G LEDs.
 
+**0.2.1: per-device MAC** — eth0 reads the factory address from the on-flash hwconfig table
+(all flashed units used to share one `02:E0:4C:81:96:C1` — collisions between neighbours on the
+same ISP segment); VLANs and Wi-Fi inherit it. A correct MAC is required by hardware NAT.
+
 **0.2.0 (test branch): RTL8197F hardware NAT** — experimental, enabled by a LuCI toggle; honest speed numbers below.
 
 **0.1.1:** sysupgrade / LuCI firmware upgrade (`…-squashfs-sysupgrade.bin`, with or without
@@ -191,6 +201,8 @@ return to stock: `mtd erase kernel && reboot` ([docs/recovery.md](docs/recovery.
 | Stock `V1.24.137` | software (hardware NAT does **not** engage: **0 NAPT rows**) | 724–748 | 791–809 | ~40% idle | 27–28.10.2026 |
 | Ours, software offload | software | 850–876 | 861–876 | 100% sirq | 29.10.2026 |
 | Ours, **hardware NAT** (test) | **silicon** | **857–900**, occasionally ~430–440 | **846–863** (up to 929 on an idle bench) | **90–100% idle** | 29.10.2026 |
+| Ours **0.2.1**, software offload | software | 759–890 | — (primary runs) | — | 30.10.2026 |
+| Ours **0.2.1**, **hardware NAT** + stress | **silicon** | 845–892; 30 min × 8 streams = **145 GB, no failures** | — | 90–100% idle | 30.10.2026 |
 
 **What it means.** The stock firmware does not engage hardware NAT on this hardware: zero NAPT rows —
 the whole gigabit rides on one CPU (724–809 at ~40% idle). This port writes the rows and hands the
@@ -202,10 +214,10 @@ drops that flow to the software path — hence the rare ~430–440 Mbit/s runs; 
 returns. Switching the NAT mode applies via a reboot (live switching is unstable). Wi-Fi and a real ISP
 link will be slower than this wired bench.
 
-**Not yet:** 2.4G LED is dark in 0.2.0 (regression vs 0.1.2: the vendor LEDCFG register of the 8197G stays
+**Not yet:** 2.4G LED is dark in 0.2.1 (regression vs 0.1.2: the vendor LEDCFG register of the 8197G stays
 zero at init; being fixed), Status LED pin found (GPIO H1, shipping in 0.1.3), noisy Wi-Fi driver log,
 console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
-**Hardware NAT is a test mode (0.2.0-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
+**Hardware NAT is a test mode (0.2.1-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
 can cause dips (see "Speed: honest numbers"); switching the mode needs a reboot. In access-point (bridge)
 mode hardware NAT does not apply — the service refuses it and leaves the bridge intact.
 
