@@ -2028,10 +2028,36 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 	if (eth->irq < 0)
 		return eth->irq;
 
-	/* MAC-адрес: из device tree, иначе случайный */
-	ret = of_get_ethdev_address(np, dev);
-	if (ret)
-		eth_hw_addr_random(dev);
+	/*
+	 * MAC-адрес: заводская запись из флеша (nvmem "mac-address", hwconfig
+	 * boot 0x20007), иначе из device tree, иначе случайный. Заводскую
+	 * Realtek шьёт с первым байтом 00, прямым её ставить нельзя: во
+	 * внутреннем свитче на этот MAC осталась статическая запись,
+	 * привязанная к другому порту, - передача умирает. Поднимаем признак
+	 * местного назначения: 00 -> 02. Правило касается только флеш-записи;
+	 * MAC из device tree не трогаем. EPROBE_DEFER не глотаем: драйвер
+	 * может стартовать раньше, чем mtd зарегистрирует nvmem-ячейки.
+	 */
+	{
+		u8 addr[ETH_ALEN];
+
+		ret = of_get_mac_address_nvmem(np, addr);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		if (!ret) {
+			if (addr[0] == 0x00)
+				addr[0] = 0x02;
+			eth_hw_addr_set(dev, addr);
+		} else {
+			ret = of_get_ethdev_address(np, dev);
+			if (ret) {
+				dev_warn(&pdev->dev,
+					 "MAC: nvmem %d, dt %d - random\n",
+					 -ret, ret);
+				eth_hw_addr_random(dev);
+			}
+		}
+	}
 
 	dev->netdev_ops = &rtl819x_netdev_ops;
 	/* проверка сумм на приёме, выключается ethtool -K eth0 rx off */
