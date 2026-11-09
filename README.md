@@ -1,5 +1,9 @@
 # OpenWrt для Ротек (Rotek) RX-23302 / ELECTRA RX23302
 
+[![Release](https://img.shields.io/github/v/release/Elengal/openwrt-rx23302?display_name=release&label=release)](https://github.com/Elengal/openwrt-rx23302/releases)
+[![Downloads](https://img.shields.io/github/downloads/Elengal/openwrt-rx23302/total?label=downloads)](https://github.com/Elengal/openwrt-rx23302/releases)
+[![License](https://img.shields.io/github/license/Elengal/openwrt-rx23302?label=license)](LICENSE)
+
 [Русский](#русский) · [English](#english)
 
 > Текущий релиз — **0.2.1**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).

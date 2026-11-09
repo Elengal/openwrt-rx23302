@@ -1,3 +1,6 @@
+---
+---
+
 # Установка без UART: кнопка Reset + TFTP / Installing without UART: Reset + TFTP
 
 > **RU** ниже, **EN** — в конце.
