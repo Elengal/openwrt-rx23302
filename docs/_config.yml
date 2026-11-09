@@ -1,8 +1,0 @@
-title: OpenWrt для Rotek RX-23302
-description: OpenWrt (Linux 6.18) для роутера Rotek RX-23302 / ELECTRA RX23302
-theme: minima
-plugins:
-  - jekyll-relative-links
-relative_links:
-  enabled: true
-  collections: false

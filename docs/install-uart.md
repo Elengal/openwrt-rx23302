@@ -1,6 +1,3 @@
----
----
-
 # Установка через UART / Installing over UART
 
 > **RU** ниже, **EN** — в конце.

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenWrt для Rotek RX-23302 / ELECTRA RX23302</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">Главная</a> · <a href="install-tftp.html">Установка (TFTP)</a> · <a href="install-uart.html">Установка (UART)</a> · <a href="recovery.html">Восстановление</a> · <a href="sources.html">Исходники</a></nav>
+<main>
+<h1 id="openwrt-rotek-rx-23302-electra-rx23302">OpenWrt для Rotek RX-23302 / ELECTRA RX23302</h1>
+<p>Своя прошивка <strong>OpenWrt (Linux 6.18)</strong> для роутера Ротек RX-23302 (Ростелеком / BeeLine / МТС).
+В официальном OpenWrt SoC <strong>Realtek RTL8197F</strong> не поддерживается — порт сделан с нуля:
+SoC, Ethernet и коммутатор RTL8367D, Wi-Fi (RTL8197G 2,4 ГГц и RTL8812FE 5 ГГц).</p>
+<p><strong>Текущий релиз — 0.2.1.</strong> Готовые образы: <a href="https://github.com/Elengal/openwrt-rx23302/releases">GitHub Releases</a>.</p>
+<h2 id="_1">Установка</h2>
+<ul>
+<li><a href="install-tftp.html">Без разборки: кнопка Reset + TFTP</a> — рекомендуемый способ, ~2 минуты</li>
+<li><a href="install-uart.html">Через UART</a> — если TFTP не подходит</li>
+</ul>
+<h2 id="-">Если что-то пошло не так</h2>
+<ul>
+<li><a href="recovery.html">Восстановление заводской прошивки</a> — заводская прошивка во втором слоте не затирается</li>
+</ul>
+<h2 id="_2">Для разработчиков</h2>
+<ul>
+<li><a href="https://github.com/Elengal/openwrt-rx23302">Исходники, патчи и сборка</a></li>
+<li><a href="sources.html">Структура порта и патчи</a></li>
+</ul>
+<h2 id="_3">Поддержка</h2>
+<p>Вопросы и сообщения о проблемах: <a href="https://github.com/Elengal/openwrt-rx23302/issues">Issues</a>.</p>
+</main>
+<footer>© Elengal · GPL-2.0 · <a href="https://github.com/Elengal/openwrt-rx23302">GitHub</a></footer>
+</div>
+</body>
+</html>

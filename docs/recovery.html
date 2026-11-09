@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Восстановление и возврат на заводскую прошивку / Recovery and return to stock</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">Главная</a> · <a href="install-tftp.html">Установка (TFTP)</a> · <a href="install-uart.html">Установка (UART)</a> · <a href="recovery.html">Восстановление</a> · <a href="sources.html">Исходники</a></nav>
+<main>
+<h1 id="recovery-and-return-to-stock">Восстановление и возврат на заводскую прошивку / Recovery and return to stock</h1>
+<blockquote>
+<p><strong>RU</strong> ниже, <strong>EN</strong> — в конце.</p>
+</blockquote>
+<h2 id="16-xm25qh128c">Разметка флеша (16 МБ, XM25QH128C)</h2>
+<table>
+<thead>
+<tr>
+<th>Смещение</th>
+<th>Размер</th>
+<th>Раздел</th>
+<th>Что там</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x000000</td>
+<td>0x030000</td>
+<td>boot</td>
+<td>загрузчик Realtek и заводские настройки платы (MAC, калибровка) — <strong>не трогать никогда</strong></td>
+</tr>
+<tr>
+<td>0x030000</td>
+<td>0x2D0000</td>
+<td>kernel</td>
+<td>ядро OpenWrt</td>
+</tr>
+<tr>
+<td>0x300000</td>
+<td>0x300000</td>
+<td>rootfs</td>
+<td>корневая система OpenWrt</td>
+</tr>
+<tr>
+<td>0x600000</td>
+<td>0x1A0000</td>
+<td>rootfs_data</td>
+<td>настройки OpenWrt (overlay)</td>
+</tr>
+<tr>
+<td>0x7A0000</td>
+<td>0x060000</td>
+<td>cfg</td>
+<td>раздел настроек заводской прошивки, только чтение</td>
+</tr>
+<tr>
+<td>0x800000</td>
+<td>0x800000</td>
+<td>stock</td>
+<td><strong>банк 2: заводская прошивка, OpenWrt его не трогает</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Заводская прошивка — dual-image: два банка по 8 МБ. OpenWrt пишется только в банк 1,
+заводская копия в банке 2 (ядро с 0x830000) остаётся нетронутой.</p>
+<h2 id="_1">Как загрузчик защищает от кирпича</h2>
+<p>При каждом включении загрузчик проверяет банк 1 (заголовок ядра <code>KE32</code> и сумму rootfs).
+Если банк 1 негоден, он <strong>сам копирует банк 2 в банк 1</strong> и загружает заводскую прошивку:</p>
+<pre><code>Checking bank2...
+Flash read from 00830000 to 80800000 with 007D0000 bytes ?
+Flash Program from 80800000 to 00030000 with 007D0000 bytes ?
+Copy bank2 to bank1 successfully!
+Jump to image start=0x80a00000...
+Linux version 3.10.90-pre5 (abudeev@honor) ...
+</code></pre>
+<p><em>(реальный лог с RX23302, 20.10.2026)</em></p>
+<p>Поэтому:
+- оборванная прошивка (выключили свет во время sysupgrade) — роутер поднимется на <strong>заводской</strong>
+  прошивке, а не превратится в кирпич;
+- возврат на сток делается одной командой (ниже).</p>
+<h2 id="20102026">Вернуть заводскую прошивку (проверено на железе 20.10.2026)</h2>
+<p>Из OpenWrt (SSH или UART):</p>
+<pre><code class="language-sh">mtd erase kernel &amp;&amp; reboot
+</code></pre>
+<p>Загрузчик не найдёт ядра в банке 1, скопирует заводскую прошивку из банка 2 и загрузит её
+(копирование ~1–2 мин, потом обычная загрузка стока). UART для этого <strong>не нужен</strong>.</p>
+<p>Проверено: после возврата банк 1 (0x30000–0x7A0000) <strong>побайтно совпадает</strong> с заводским дампом
+флеша, загрузчик и заводские настройки платы не тронуты.</p>
+<blockquote>
+<p>Заводская прошивка поднимет свои настройки Ростелекома (раздел <code>cfg</code> OpenWrt не трогает).
+Хотите вернуть ещё и заводские настройки — сделайте сброс кнопкой Reset на стоке.</p>
+</blockquote>
+<h2 id="openwrt">Если OpenWrt не загружается</h2>
+<p><strong>Без разборки:</strong> выключите роутер, зажмите Reset, включите питание, держите ~10 с — загрузчик
+поднимет аварийный TFTP на 192.168.1.6. Передайте <code>…-squashfs-tftp-factory.bin</code> —
+<a href="install-tftp.html">install-tftp.md</a>. Так же OpenWrt ставится заново после возврата на сток.</p>
+<p><strong>Через UART</strong> (если TFTP не помог):
+1. Подключите UART (38400 8N1), включите роутер, жмите Esc до приглашения <code>&lt;RealTek&gt;</code>.
+2. Прошейте образ заново: <code>tools/flash-uart.py</code> (он сам ловит загрузчик) — <a href="install-uart.html">install-uart.md</a>.</p>
+<p>Сток → OpenWrt проверено обоими способами.</p>
+<p>Загрузчик живёт в отдельной области и прошивкой не затирается: пока он печатает
+<code>&lt;RealTek&gt;</code>, устройство восстанавливается.</p>
+<h2 id="_2">Правила загрузчика</h2>
+<ul>
+<li>Команды только <strong>с полными аргументами</strong>. <code>FLR</code> и <code>AUTOBURN</code> без аргументов вешают загрузчик до сброса питания.</li>
+<li>На вопрос <code>(Y)es, (N)o</code> — <strong><code>Y</code> и Enter</strong>. Без Enter загрузчик молча ждёт бесконечно (выглядит как зависание).</li>
+<li>Пока <code>FLW</code>/<code>FLR</code> печатают точки — ничего не отправлять.</li>
+<li>Слово <code>&lt;RealTek&gt;</code> в выводе ещё не значит «готово» — ждите <code>Successed</code> или тишину.</li>
+</ul>
+<hr />
+<h2 id="english">English</h2>
+<p><strong>Flash layout:</strong> see the table above. OpenWrt lives in bank 1; the <strong>stock firmware in bank 2
+(0x800000, kernel at 0x830000) is never written</strong>. The bootloader (0x0–0x30000) is never written.</p>
+<p><strong>Brick protection:</strong> on every boot the bootloader validates bank 1 (<code>KE32</code> kernel header and
+rootfs checksum). If bank 1 is invalid it <strong>copies bank 2 over bank 1 by itself</strong> and boots the
+stock firmware (<code>Copy bank2 to bank1 successfully!</code>, real log above). An interrupted sysupgrade
+therefore ends in stock firmware, not a brick.</p>
+<p><strong>Return to stock (verified on hardware 2026-10-20):</strong> from OpenWrt run</p>
+<pre><code class="language-sh">mtd erase kernel &amp;&amp; reboot
+</code></pre>
+<p>The bootloader restores the stock firmware from bank 2 (~1–2 min) and boots it. No UART needed.
+After the restore bank 1 matched the original stock flash dump byte for byte.</p>
+<p><strong>OpenWrt does not boot:</strong> hold Reset while powering on (~10 s) and send
+<code>…-squashfs-tftp-factory.bin</code> to 192.168.1.6 over TFTP (<a href="install-tftp.html">install-tftp.md</a>); no case
+opening needed. Fallback: UART, Esc until <code>&lt;RealTek&gt;</code>, <code>tools/flash-uart.py</code>
+(<a href="install-uart.html">install-uart.md</a>). Stock → OpenWrt is verified both ways.</p>
+<p>Never send bootloader commands without arguments; answer <code>(Y)es, (N)o</code> with <code>Y</code> <strong>and</strong> Enter.</p>
+</main>
+<footer>© Elengal · GPL-2.0 · <a href="https://github.com/Elengal/openwrt-rx23302">GitHub</a></footer>
+</div>
+</body>
+</html>

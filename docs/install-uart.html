@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Установка через UART / Installing over UART</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">Главная</a> · <a href="install-tftp.html">Установка (TFTP)</a> · <a href="install-uart.html">Установка (UART)</a> · <a href="recovery.html">Восстановление</a> · <a href="sources.html">Исходники</a></nav>
+<main>
+<h1 id="uart-installing-over-uart">Установка через UART / Installing over UART</h1>
+<blockquote>
+<p><strong>RU</strong> ниже, <strong>EN</strong> — в конце.</p>
+</blockquote>
+<h2 id="_1">⚠️ Прочитайте до начала</h2>
+<ul>
+<li>Только для <strong>Ротек RX-23302 с SoC RTL8197FH-VG</strong> (заводская прошивка <code>ELECTRA-RX23302</code>).
+  Ревизия <strong>RX-23302R</strong> и другие модели не проверялись. Проверка до прошивки: в самом начале
+  лога загрузки по UART (шаг 1) у проверенного устройства — <code>Realtek RTL8197F-VG boot code …</code>.
+  Другая строка — не прошивайте.</li>
+<li><strong>Проще без UART:</strong> с 0.1.2 OpenWrt ставится кнопкой Reset и TFTP, без разборки —
+  <a href="install-tftp.html">install-tftp.md</a>. UART — запасной путь и для тех, кто хочет видеть лог
+  (установка через заводской веб-интерфейс Ростелекома не проверялась). Дальнейшие обновления — уже из LuCI, без UART
+  (файл <code>…-squashfs-sysupgrade.bin</code>, см. README).</li>
+<li>Нужен разбор корпуса и USB-UART адаптер <strong>3,3 В</strong>. Адаптер на 5 В может сжечь SoC.</li>
+<li>Вы делаете это на свой риск. Гарантия на устройство пропадёт.</li>
+<li>Заводская прошивка во <strong>втором слоте флеша (0x800000) не затирается</strong> — путь назад есть,
+  см. <a href="recovery.html">recovery.md</a>.</li>
+</ul>
+<h2 id="_2">Что понадобится</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>USB-UART адаптер 3,3 В</td>
+<td>CH340, CP2102, FT232 — любой</td>
+</tr>
+<tr>
+<td>Провода</td>
+<td>3 штуки: GND, TX, RX</td>
+</tr>
+<tr>
+<td>Компьютер</td>
+<td>Linux (проверено) или Windows/macOS с Python 3</td>
+</tr>
+<tr>
+<td>Python 3 + pyserial</td>
+<td><code>pip install pyserial</code></td>
+</tr>
+<tr>
+<td>Образ</td>
+<td><code>openwrt-…-electra_rx23302-squashfs-full.bin</code> из Releases или своей сборки</td>
+</tr>
+<tr>
+<td>Время</td>
+<td>~45 мин (передача ~27 мин + запись ~13 мин + загрузка и сверка ~5 мин)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="1-uart">1. Подключение UART</h2>
+<p>Параметры порта: <strong>38400 8N1</strong>, без управления потоком.</p>
+<p><strong>Где UART:</strong> снимите крышку — на плате <strong>торчат 4 штыря</strong>, это и есть UART. Назначение каждого
+штыря <strong>подписано на плате</strong>. Паять не нужно, провода с гнёздами (Dupont) надеваются прямо
+на штыри. Питание (VCC/3,3 В) <strong>не подключать</strong> — нужны только GND, TX и RX.</p>
+<p>Если вывода нет — поменяйте TX и RX местами, ничего не сгорит.</p>
+<p><img alt="UART на плате RX23302: слева направо GND, RX, TX, VCC" src="img/uart-header.jpg" /></p>
+<p><em>Слева направо: <strong>GND, RX, TX, VCC</strong>. VCC не подключать.</em></p>
+<p>Соединение крест-накрест: TX адаптера → RX роутера, RX адаптера → TX роутера, GND → GND.
+Питание (VCC) <strong>не подключать</strong>.</p>
+<p>Проверка: откройте порт любым терминалом (<code>picocom -b 38400 /dev/ttyUSB0</code>), включите роутер —
+должен пойти лог загрузки с <code>Booting...</code>. Если видите мусор — проверьте скорость 38400.</p>
+<h2 id="2">2. Прошивка</h2>
+<p>Терминал закройте (порт должен быть свободен), затем:</p>
+<pre><code class="language-sh">python3 tools/flash-uart.py openwrt-rtl819x-rtl8197f-electra_rx23302-squashfs-full.bin /dev/ttyUSB0
+</code></pre>
+<p>Когда скрипт напишет «жду загрузчик» — <strong>выключите и включите роутер</strong>. Скрипт поймает
+приглашение <code>&lt;RealTek&gt;</code> (шлёт Esc во время загрузки), затем:</p>
+<ol>
+<li>передаст образ в ОЗУ по XMODEM (~27 мин);</li>
+<li>запишет во флеш командой <code>FLW</code> (~13 мин, печатаются точки) — <strong>питание не трогать</strong>;</li>
+<li>дождётся конца записи и напечатает две md5-суммы — по ним флеш сверяется после загрузки (шаг 3).</li>
+</ol>
+<p>В конце должно быть <code>ГОТОВО</code>.</p>
+<blockquote>
+<p>Если передача XMODEM оборвалась — флеш ещё не тронут, просто запустите заново.</p>
+<p>Ключ <code>--flr</code> добавляет сверку прямо в загрузчике (<code>FLR</code> + <code>CMP</code>, ещё ~15 мин). По умолчанию
+сверка — из Linux: так быстрее.</p>
+<p>Если работаете с загрузчиком руками: на вопрос <code>(Y)es, (N)o</code> отвечайте <strong><code>Y</code> и Enter</strong>.
+Без Enter загрузчик молча ждёт бесконечно — выглядит как зависание.</p>
+</blockquote>
+<h2 id="3">3. Первая загрузка</h2>
+<p>В терминале на 38400:</p>
+<pre><code>&lt;RealTek&gt;reboot
+</code></pre>
+<p>(или просто выключите и включите питание).</p>
+<p>После загрузки (~1,5 мин) нажмите Enter и <strong>сверьте флеш</strong> — суммы должны совпасть с теми,
+что напечатал <code>flash-uart.py</code>:</p>
+<pre><code class="language-sh">md5sum /dev/mtd1
+head -c &lt;число из вывода flash-uart.py&gt; /dev/mtd2 | md5sum
+</code></pre>
+<p>Не совпали — не продолжайте, прошейте заново. Совпали — <strong>сотрите старые настройки</strong>:</p>
+<pre><code class="language-sh">firstboot -y
+</code></pre>
+<p>Затем отдельной командой:</p>
+<pre><code class="language-sh">sync; reboot
+</code></pre>
+<blockquote>
+<p>Отправляйте команды <strong>по одной и коротко</strong>, подождав ~1 минуту после
+<code>Please press Enter</code>: драйвер Wi-Fi при запуске выводит много сообщений, и длинная
+строка может потеряться.</p>
+</blockquote>
+<h2 id="4">4. После установки</h2>
+<p>Роутер работает как обычный OpenWrt-роутер:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LAN</td>
+<td>192.168.0.1, DHCP для клиентов</td>
+</tr>
+<tr>
+<td>WAN (синее гнездо)</td>
+<td>DHCP-клиент</td>
+</tr>
+<tr>
+<td>Wi-Fi</td>
+<td><code>RX23302</code> (2,4 ГГц) и <code>RX23302-5G</code>, пароль <strong>1234567890</strong> — смените!</td>
+</tr>
+<tr>
+<td>Веб</td>
+<td>LuCI: <a href="http://192.168.0.1">http://192.168.0.1</a>, пользователь <code>root</code>, пароля нет — задайте при первом входе</td>
+</tr>
+<tr>
+<td>SSH</td>
+<td><code>ssh root@192.168.0.1</code></td>
+</tr>
+</tbody>
+</table>
+<p>Гнёзда: <strong>синее = WAN</strong>, <strong>жёлтые = LAN1, LAN2</strong>.</p>
+<hr />
+<h2 id="english">English</h2>
+<p><strong>Read first.</strong> For <strong>Rotek RX-23302 with RTL8197FH-VG only</strong> (stock firmware <code>ELECTRA-RX23302</code>); the RX-23302R revision is untested. Before flashing, the UART boot log must start with <code>Realtek RTL8197F-VG boot code …</code>. Since 0.1.2 the easier way is Reset + TFTP without opening the case (<a href="install-tftp.html">install-tftp.md</a>);
+UART is the fallback. For UART you need to open
+the case and use a <strong>3.3 V</strong> USB-UART adapter. The stock firmware in the <strong>second flash slot
+(0x800000) is not overwritten</strong>, see <a href="recovery.html">recovery.md</a>. At your own risk. Only the first
+install needs UART; later upgrades go through LuCI / <code>sysupgrade</code> with <code>…-squashfs-sysupgrade.bin</code>.</p>
+<p><strong>Serial:</strong> 38400 8N1, no flow control. Remove the cover: the UART is the <strong>4-pin header</strong>
+on the board, each pin is labelled on the PCB. No soldering, Dupont wires
+fit. GND–GND, adapter TX → router RX, adapter RX → router TX, do not connect VCC. No output —
+swap TX/RX, nothing breaks.</p>
+<p><img alt="UART header: GND, RX, TX, VCC" src="img/uart-header.jpg" /></p>
+<p><em>Left to right: <strong>GND, RX, TX, VCC</strong>. Leave VCC unconnected.</em></p>
+<p><strong>Flash:</strong></p>
+<pre><code class="language-sh">pip install pyserial
+python3 tools/flash-uart.py &lt;full.bin&gt; /dev/ttyUSB0
+</code></pre>
+<p>Power-cycle the router when asked. The script catches the <code>&lt;RealTek&gt;</code> prompt, sends the image
+over XMODEM (~27 min), writes it with <code>FLW</code> (~13 min, do not cut power) and prints two md5 sums
+for verification after boot. <code>--flr</code> adds an in-bootloader read-back (<code>FLR</code> + <code>CMP</code>, ~15 min more); verifying from Linux is
+faster, so it is off by default. Manual bootloader use: answer <code>(Y)es, (N)o</code> with <strong><code>Y</code> and
+Enter</strong> — without Enter it silently waits forever and looks hung.</p>
+<p><strong>First boot:</strong> <code>reboot</code> at the <code>&lt;RealTek&gt;</code> prompt (or power-cycle); after boot check
+<code>md5sum /dev/mtd1</code> and <code>head -c &lt;N&gt; /dev/mtd2 | md5sum</code> against the sums printed by the script,
+then run <code>firstboot -y</code>, then
+<code>sync; reboot</code> — as separate short commands, about a minute after <code>Please press Enter</code>.</p>
+<p><strong>Defaults:</strong> LAN 192.168.0.1 (DHCP server), WAN = blue port (DHCP client), Wi-Fi <code>RX23302</code> /
+<code>RX23302-5G</code> with password <code>1234567890</code> (change it), LuCI at http://192.168.0.1, user <code>root</code>,
+no password until you set one.</p>
+</main>
+<footer>© Elengal · GPL-2.0 · <a href="https://github.com/Elengal/openwrt-rx23302">GitHub</a></footer>
+</div>
+</body>
+</html>

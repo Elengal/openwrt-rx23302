@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Откуда что взято / Sources and licenses</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<nav><a href="index.html">Главная</a> · <a href="install-tftp.html">Установка (TFTP)</a> · <a href="install-uart.html">Установка (UART)</a> · <a href="recovery.html">Восстановление</a> · <a href="sources.html">Исходники</a></nav>
+<main>
+<h1 id="sources-and-licenses">Откуда что взято / Sources and licenses</h1>
+<p>Это инженерный обзор происхождения кода, а не юридическое заключение.
+This is an engineering provenance review, not legal advice.</p>
+<p>Заголовки лицензий и авторские права в файлах остаются как есть и имеют приоритет
+над этим обзором. / File-level notices are kept intact and take precedence.</p>
+<h2 id="base">База / Base</h2>
+<table>
+<thead>
+<tr>
+<th>Что</th>
+<th>Откуда</th>
+<th>Версия</th>
+<th>Лицензия</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenWrt (система сборки, пакеты)</td>
+<td><a href="https://github.com/openwrt/openwrt">https://github.com/openwrt/openwrt</a></td>
+<td><code>82e2e4f4</code> (main, 09.08.2026)</td>
+<td>GPL-2.0-only + лицензии пакетов</td>
+</tr>
+<tr>
+<td>Фид packages</td>
+<td><a href="https://git.openwrt.org/feed/packages.git">https://git.openwrt.org/feed/packages.git</a></td>
+<td><code>712ee13a</code></td>
+<td>по пакетам</td>
+</tr>
+<tr>
+<td>Фид LuCI</td>
+<td><a href="https://git.openwrt.org/project/luci.git">https://git.openwrt.org/project/luci.git</a></td>
+<td><code>4c0a4eda</code></td>
+<td>Apache-2.0 (LuCI)</td>
+</tr>
+<tr>
+<td>Ядро Linux</td>
+<td>kernel.org через OpenWrt</td>
+<td>6.18.41</td>
+<td>GPL-2.0</td>
+</tr>
+</tbody>
+</table>
+<p>Закреплённые версии — в <a href="../versions.mk.sh"><code>versions.mk.sh</code></a>.</p>
+<h2 id="components-in-this-repository">Компоненты этого репозитория / Components in this repository</h2>
+<p>Пути — внутри <a href="../openwrt/"><code>openwrt/</code></a>.</p>
+<h3 id="rtl8197f-targetlinuxrtl819x">Платформа RTL8197F (<code>target/linux/rtl819x/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Компонент</th>
+<th>Путь</th>
+<th>Происхождение</th>
+<th>Лицензия</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Поддержка SoC (prom, irq, timer, setup, gpio), DTSI</td>
+<td><code>files-6.18/arch/mips/realtek/</code>, <code>dts/RTL819X.dtsi</code>, <code>dts/RTL8197F*.dtsi</code></td>
+<td>форк <a href="https://github.com/choryuidentify/openwrt-rtl8197f">choryuidentify/openwrt-rtl8197f</a> (ядро 4.14), авторы Weijie Gao, Gaspare Bruno; перенесено на 6.18 нами</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>PCIe (для 5 ГГц)</td>
+<td><code>files-6.18/arch/mips/pci/pci-realtek.c</code></td>
+<td>тот же форк (Gaspare Bruno)</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Контроллер SPI-флеша Sheipa</td>
+<td><code>files-6.18/drivers/spi/spi-sheipa.*</code></td>
+<td>Realtek SDK (Copyright 2015 Realtek, «GPL version 2» в шапке)</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>LZMA-загрузчик ядра</td>
+<td><code>image/lzma-loader/</code></td>
+<td>OpenWrt (Gabor Juhos) + Weijie Gao</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Упаковщик образа <code>cvimg</code> (KE32)</td>
+<td><code>tools/cvimg/</code></td>
+<td>Weijie Gao, по мотивам утилиты Realtek</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Ethernet-контроллер 8197F</td>
+<td><code>files-6.18/drivers/net/ethernet/rtl819x_eth.*</code></td>
+<td><strong>написан в этом проекте</strong>, значения регистров сверены с Realtek SDK (<code>rtl819x_swNic.c</code>, GPL)</td>
+<td>GPL-2.0-only</td>
+</tr>
+<tr>
+<td>Аппаратный NAT: движок таблиц</td>
+<td><code>files-6.18/drivers/net/ethernet/rtl865x_asichal.*</code></td>
+<td><strong>порт</strong> <a href="https://github.com/ADCDS/openwrt-dlink-dir842-r1">ADCDS/openwrt-dlink-dir842-r1</a> (GPL-2.0): реверс-инжиниринг таблиц ASIC (L2/ARP/L3/NETIF/EXTIP/NAPT/nexthop) по стоку 3.10.90 и вендорскому SDK; адаптирован нами (раскладка платы, без PPPoE)</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Аппаратный NAT: conntrack → NAPT</td>
+<td><code>files-6.18/drivers/net/ethernet/rtl819x_hwnat.*</code></td>
+<td><strong>порт</strong> ADCDS (GPL-2.0); переработан под штатный flowtable-интерфейс ядра 6.18 (<code>ndo_setup_tc</code>/<code>TC_SETUP_FT</code>/<code>FLOW_CLS_*</code> вместо downstream <code>ndo_flow_offload</code>) и таймауты ядра</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Общие регистры свитча</td>
+<td><code>files-6.18/drivers/net/ethernet/rtl819x_regs.h</code></td>
+<td><strong>этот проект</strong> (значения — вендорский SDK)</td>
+<td>GPL-2.0-only</td>
+</tr>
+<tr>
+<td>Переключатель режимов NAT (init-скрипты, nft-сниппет, uci-defaults)</td>
+<td><code>base-files/etc/init.d/rtl819x-hwnat*</code>, <code>base-files/usr/share/nftables.d/table-post/20-rx23302-flowtable-eth0.nft</code>, <code>base-files/etc/uci-defaults/05_enable_flow_offloading</code></td>
+<td><strong>этот проект</strong></td>
+<td>GPL-2.0-only</td>
+</tr>
+<tr>
+<td>Device tree RX23302</td>
+<td><code>dts/rtl8197f_electra_rx23302.dts</code></td>
+<td><strong>этот проект</strong>, по живому устройству</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Скрипты образа</td>
+<td><code>scripts/rx23302-full-image.py</code>, <code>scripts/rx23302-tftp-image.py</code>, <code>scripts/rtl819x-rootfs-chksum.py</code></td>
+<td><strong>этот проект</strong>; формат TFTP-образа — по разбору заводского загрузчика</td>
+<td>GPL-2.0-only</td>
+</tr>
+<tr>
+<td>base-files (netifd/wifi-скрипты, 02_network, uci-defaults); утилита <code>rtlmib</code> — пакет из исходника</td>
+<td><code>base-files/</code>, <code>package/utils/rtlmib/</code></td>
+<td><strong>этот проект</strong>; <code>rtl8192cd.sh</code> по мотивам <a href="https://github.com/sowarden/hh71vm-openwrt">sowarden/hh71vm-openwrt</a> (<code>8881e78</code>)</td>
+<td>GPL-2.0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rtl8367d-files-618driversnetphy">Коммутатор RTL8367D (<code>files-6.18/drivers/net/phy/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Компонент</th>
+<th>Происхождение</th>
+<th>Лицензия</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rtl8367b.c</code>, <code>rtl8366_smi.h</code> — драйвер свитча (swconfig)</td>
+<td>OpenWrt <code>target/linux/generic/files/drivers/net/phy/</code> (Gabor Juhos и др.), копия с поддержкой RTL8367D rev 0x0030: распознавание чипа, сброс по GPIO, инициализация чипа, VLAN-запись под эту ревизию, атрибут <code>fid</code>, исправлен перевёрнутый тайм-аут чтения/записи PHY</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Шина SMI и общая часть (<code>rtl8366_smi.c</code>)</td>
+<td>OpenWrt, копия: debugfs-окно (<code>/sys/kernel/debug/switch/</code>: <code>reg</code>/<code>val</code>, <code>pvid</code>, <code>vlan_mc</code>, <code>vlan_4k</code>, <code>mibs</code>) переведено на API debugfs Linux 6.x</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>swconfig</td>
+<td>OpenWrt, без изменений</td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Значения аналоговой подстройки PHY (5 чисел)</td>
+<td>значения регистров из драйвера производителя (как таблицы <code>jam</code> в mainline <code>rtl8365mb</code>)</td>
+<td>факты о железе</td>
+</tr>
+<tr>
+<td><code>realtek,init-regs</code> в DTS — настройка платы (149 записей)</td>
+<td><strong>этот проект</strong>: сняты с работающего загрузчика и подобраны опытом на живой плате</td>
+<td>GPL-2.0</td>
+</tr>
+</tbody>
+</table>
+<p>Код Realtek SDK (<code>rtk_api.c</code>, <code>rtl8367b_asicdrv*</code>, <code>smi.c</code>, шапка
+«proprietary») из репозитория <strong>удалён</strong>. Таблица начальных значений чипа
+совпадает с <code>rtl8367b_initvals</code> из OpenWrt (150 пар, одна пара отличается
+и задана в коде драйвера).</p>
+<h3 id="wi-fi-rtl8192fe-files-618driversnetwirelessrtl8192fe">Wi-Fi rtl8192fe (<code>files-6.18/drivers/net/wireless/rtl8192fe/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Что</th>
+<th>Происхождение</th>
+<th>Лицензия</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Драйвер «RTK-8192FE-wlan-driver 3.8.0» (2.4 ГГц RTL8197G + 5 ГГц RTL8812F)</td>
+<td>GPL-архив TP-Link <strong>Archer AX12 v1</strong> (<code>GPL_AX12v1</code>, <code>rtl8197/backports-5.2.8-1/drivers/net/wireless/realtek/rtl8192fe</code>), получен через <a href="https://github.com/tobyw121/Openwrt_RTL">tobyw121/Openwrt_RTL</a> (<code>e6d68e90</code>)</td>
+<td>865 файлов с шапкой GPL, 174 — mbed TLS (Apache-2.0, ARM), 407 без шапки (сгенерированные таблицы, HAL)</td>
+</tr>
+<tr>
+<td>Перенос на ядро 6.18 (таймеры, DMA, proc_ops, WEXT…)</td>
+<td><strong>этот проект</strong></td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Части halmac/phydm 8812F, sha256</td>
+<td><a href="https://github.com/sowarden/hh71vm-openwrt">sowarden/hh71vm-openwrt</a>, <a href="https://github.com/Putpocket/iptime-a2004mu-openwrt">Putpocket/iptime-a2004mu-openwrt</a></td>
+<td>GPL-2.0</td>
+</tr>
+<tr>
+<td>Бинарные прошивки радио (<code>data_rtl8197Gfw.c</code>, <code>data_rtl8812Ffw*.c</code>, <code>*.bin</code>)</td>
+<td>поставляются в GPL-архивах производителя, не изменялись</td>
+<td>условия производителя</td>
+</tr>
+</tbody>
+</table>
+<p>Сверка с копией у tobyw121 (<code>e6d68e90</code>, 19.10.2026): из 1880 наших файлов 1644 совпадают байт в
+байт, 32 изменены (перенос на 6.18), 204 добавлены: 71 — байт в байт из hh71vm (таблицы и halmac 8812F),
+остальные — сгенерированные из этих таблиц <code>data_*.c</code>, переходники <code>compat_*</code>, <code>rx23302.mk</code>,
+<code>Kconfig.rx23302</code>, <code>config_8192cd.h</code>, <code>git_info.h</code>.</p>
+<p>Официально исходники драйвера TP-Link раздаёт через GPL Code Center:
+<a href="https://www.tp-link.com/us/support/gpl-code/">https://www.tp-link.com/us/support/gpl-code/</a> (модель Archer AX12 v1).</p>
+<p>Из драйвера убраны таблицы и прошивки чужих чипов, которые наша конфигурация не собирает
+(<code>WlanHAL/Data/</code> 8192E, 8192F, 8198F, 8814A, 8814B, 8821C, 8822B, 8822C, 8881A; <code>data*/</code> 92C/92D/88E/8812/8723;
+<code>pe/</code>) — ~3 МБ. Остались только 8197G и 8812F.</p>
+<p>Из драйвера убраны Windows-утилиты Realtek из GPL-архива (<code>clone88xx.exe</code>, <code>MP_Precomp.exe</code>,
+<code>insert_halmac_in_reg_def.exe</code>, <code>Run4WindowsOnly.bat</code>) — для сборки не нужны.</p>
+<p>Удалено из дерева порта как неиспользуемое: старый драйвер <code>rtl8192cd</code> (40 МБ),
+отладочные патчи DSA <code>rtl8365mb</code> (730–735) и сам DSA — свитч управляется своим кодом.</p>
+<h3 id="openwrt">Пакеты OpenWrt</h3>
+<table>
+<thead>
+<tr>
+<th>Компонент</th>
+<th>Путь</th>
+<th>Лицензия</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>iwinfo: Wireless Extensions для rtl8192cd (патчи 200–206)</td>
+<td><code>package/network/utils/iwinfo/patches/</code></td>
+<td>GPL-2.0 (как iwinfo)</td>
+</tr>
+<tr>
+<td>LuCI: настройки Wi-Fi для rtl8192cd</td>
+<td><code>feeds-patches/luci-mod-network/</code></td>
+<td>Apache-2.0 (как LuCI)</td>
+</tr>
+<tr>
+<td>netifd: исправление цикла чтения обработчиков</td>
+<td><code>openwrt-upstream.patch</code></td>
+<td>GPL-2.0 (как netifd); отправлено в OpenWrt: PR #25851</td>
+</tr>
+<tr>
+<td><code>feeds-patches/</code> для пакетов из фидов</td>
+<td><code>openwrt-upstream.patch</code> (include/package.mk)</td>
+<td>GPL-2.0-only</td>
+</tr>
+</tbody>
+</table>
+<h2 id="reference-projects">Доноры, которые изучались / Reference projects</h2>
+<ul>
+<li><a href="https://github.com/choryuidentify/openwrt-rtl8197f">choryuidentify/openwrt-rtl8197f</a> — исходный порт RTL8197F на OpenWrt (ядро 4.14).</li>
+<li><a href="https://github.com/Putpocket/iptime-a2004mu-openwrt">Putpocket/iptime-a2004mu-openwrt</a> — RTL8197F + RTL8367RB на ядре 6.18; CPU-тег и аппаратный NAT — <strong>изучались</strong> (идеи CPU-тега для router mode), код не копировался: наш hw NAT — порт ADCDS.</li>
+<li><a href="https://github.com/sowarden/hh71vm-openwrt">sowarden/hh71vm-openwrt</a> — RTL8197FS + RTL8812FE (наша пара радио), halmac 1.6.6.6.</li>
+<li><a href="https://github.com/tobyw121/Openwrt_RTL">tobyw121/Openwrt_RTL</a> — Xiaomi RD05 (RTL8197FH + RTL8367D, плата-близнец), исходники из GPL-архивов.</li>
+<li><a href="https://github.com/ADCDS/openwrt-dlink-dir842-r1">ADCDS/openwrt-dlink-dir842-r1</a> — D-Link DIR-842, 802.11w в старом драйвере.
+  <strong>Источник аппаратного NAT (0.2.0):</strong> реверс-инжиниринг ASIC-таблиц RTL865xC/8197F и протокола NAPT
+  (<code>rtl865x_asichal.c</code>, <code>rtl819x_hwnat.c</code>, SPDX GPL-2.0). Взято ~2700 строк; наш перенос — не копия
+  байт в байт, изменения: API ядра (<code>ndo_setup_tc</code>/<code>TC_SETUP_FT</code>/<code>FLOW_CLS_REPLACE|DESTROY|STATS</code> вместо
+  downstream <code>ndo_flow_offload</code>), VID 8/9 и раскладка гнёзд этой платы, ARP-окно подключённой WAN-сети,
+  <code>dstVid</code> в nexthop = индекс netif (в доноре совпадал с VID случайно), без PPPoE. Подробности — в истории
+  коммитов ветки (bf613f0…386bd37).
+  Наш проект — GPL-2.0-only, донор — GPL-2.0: совместимо; заголовки SPDX в наших файлах сохранены.</li>
+</ul>
+</main>
+<footer>© Elengal · GPL-2.0 · <a href="https://github.com/Elengal/openwrt-rx23302">GitHub</a></footer>
+</div>
+</body>
+</html>
