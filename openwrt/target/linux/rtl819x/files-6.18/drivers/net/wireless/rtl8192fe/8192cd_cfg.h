@@ -440,7 +440,7 @@
 //-------------------------------------------------------------
 // Debug function
 //-------------------------------------------------------------
-//#define _DEBUG_RTL8192CD_		// defined when debug print is used
+#define _DEBUG_RTL8192CD_		// диагностика через mib debug_*; по умолчанию маски 0 (тихо)
 #define _IOCTL_DEBUG_CMD_		// defined when read/write register/memory command is used in ioctl
 //#define _AMPSDU_AMSDU_DEBUG_		// defined when debug for ampdu_amsdu
 #define ADAPTIVITY_STATS_DEBUG		// stats for adaptivity

@@ -6756,12 +6756,12 @@ int Read_PG_File(struct rtl8192cd_priv *priv, int reg_file, int table_number,
 #endif
 
 #if !defined(WLAN_REG_FW_RAM_REFINE) || !defined(__ECOS)
-	if ((macreg_table= (unsigned char *)kmalloc(PHY_REG_PG_SIZE, GFP_ATOMIC)) == NULL) {
+	if ((macreg_table= kmalloc(PHY_REG_PG_SIZE, GFP_ATOMIC)) == NULL) {
 		panic_printk("%s(): not enough memory\n", __FUNCTION__);
 		return -1;
 	}
 	
-	if ((phyreg_table= (unsigned char *)kmalloc(PHY_REG_SIZE, GFP_ATOMIC)) == NULL) {
+	if ((phyreg_table= kmalloc(PHY_REG_SIZE, GFP_ATOMIC)) == NULL) {
 		panic_printk("%s(): not enough memory\n", __FUNCTION__);
 		if(macreg_table)
 			kfree(macreg_table);
