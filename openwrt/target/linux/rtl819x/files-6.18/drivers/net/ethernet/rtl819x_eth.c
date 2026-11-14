@@ -1157,6 +1157,7 @@ static int rtl819x_intsw_zapis_vlan(u16 vid, u32 chleny, u32 untag, u32 fid)
 	return 0;
 }
 
+
 /*
  * Строка таблицы L2 (MAC -> порты) внутреннего свитча. Формат и хеш строки —
  * донор DIR-842 (rtl865x_asichal.c: gw_l2_row, gw_write_l2_full), значения
@@ -1192,6 +1193,7 @@ static int rtl819x_intsw_zapis_l2(const u8 *mac, u32 fid, bool na_cpu)
 	rtl_sw_w(RTL_SWTCR0, RTL_EN_STOP_TLU | rtl_sw_r(RTL_SWTCR0));
 	ret = rtl819x_intsw_zhdat(RTL_SWTCR0, RTL_STOP_TLU_READY,
 				  RTL_STOP_TLU_READY);
+
 	if (ret)
 		return ret;
 
@@ -1208,6 +1210,118 @@ static int rtl819x_intsw_zapis_l2(const u8 *mac, u32 fid, bool na_cpu)
 		stroka, stroka << 2, fid, slovo[0], slovo[1], ret);
 	return ret;
 }
+
+
+/* ---- Wi-Fi станции в таблице L2 ---------
+ *
+ * Аппаратное обучение свитча ловит MAC'и клиентов Wi-Fi на гнезде LAN1
+ * (порт 3): их кадры возвращаются туда флудом от upstream-роутера, после
+ * чего unicast к клиенту уходит в провод и умирает. Клиент не получает
+ * ответов DHCP (Android: NETWORK_SELECTION_DISABLED_DHCP_FAILURE; в
+ * wlan-драйвере копятся tx_drops_noasoc).
+ *
+ * Лечение: при ассоциации вносим станцию СТАТИЧЕСКИ на процессорный порт
+ * (ext 2 = порт 8) с toCPU=1. Статическая запись перекрывает динамическое
+ * обучение, unicast к клиенту свитч возвращает в CPU, мост до wlan
+ * работает. При удалении станции запись стирается.
+ *
+ * Выбор строки и формат слова — rtl8651_filterDbIndex/rtl8651_setAsicL2Table
+ * из Realtek SDK (AsicDriver/rtl865x_asicL2.c:866,873); окно записи — как в
+ * rtl819x_intsw_zapis_vlan выше. Пустая запись: agingTime==0 и !isStatic
+ * (как в rtl8651_asicL2DAlookup). Зовётся из rtl8192fe (8192cd_sme.c).
+ */
+
+int rtl819x_wifi_sta_l2_sync(const unsigned char *mac, int add);
+
+#define RTL819X_L2_ROWS		256
+#define RTL819X_L2_COLS		4
+#define RTL819X_TYPE_L2		RTL_TYPE_L2_TABLE
+
+static const u8 rtl819x_fid_hash[4] = { 0x00, 0x0f, 0xf0, 0xff };
+
+int rtl819x_wifi_sta_l2_sync(const unsigned char *mac, int add)
+{
+	u32 row = ((mac[0] ^ mac[1] ^ mac[2] ^ mac[3] ^ mac[4] ^ mac[5] ^
+		    rtl819x_fid_hash[0]) & 0xff);
+	int col, nash = -1, svobodno = -1, ret;
+	unsigned int i;
+	u32 slovo[8];
+
+	/* найти наш MAC среди колонок строки и первый свободный слот */
+	for (col = 0; col < RTL819X_L2_COLS; col++) {
+		u32 adres = RTL_SWTBL_BASE + (RTL_TYPE_L2_TABLE << 16) +
+			    ((row << 2 | col) * RTL_TBL_ENTRY_LEN);
+		u32 w0 = rtl_sw_r(adres);
+		u32 w1 = rtl_sw_r(adres + 4);
+
+		if (((w1 >> 19) & 3) == 0 && ((w1 >> 18) & 1) == 0) {
+			if (svobodno < 0)
+				svobodno = col;
+			continue;
+		}
+		if ((w1 & 0xff) == mac[0] &&
+		    ((w0 >> 24) & 0xff) == mac[1] &&
+		    ((w0 >> 16) & 0xff) == mac[2] &&
+		    ((w0 >> 8) & 0xff) == mac[3] &&
+		    (w0 & 0xff) == mac[4]) {
+			nash = col;
+			break;
+		}
+	}
+
+	if (!add) {
+		if (nash < 0)
+			return 0;	/* записи и так нет */
+		col = nash;
+		memset(slovo, 0, sizeof(slovo));	/* нулевая = удаление */
+	} else {
+		if (nash >= 0)
+			col = nash;
+		else if (svobodno >= 0)
+			col = svobodno;
+		else
+			return -ENOSPC;
+
+		memset(slovo, 0, sizeof(slovo));
+		/* слово 0: MAC[1..4]; слово 1: MAC[0] и поля записи */
+		slovo[0] = ((u32)mac[1] << 24) | ((u32)mac[2] << 16) |
+			   ((u32)mac[3] << 8) | mac[4];
+		slovo[1] = (mac[0] & 0xff) |
+			   (4u << 14) |
+			   (1 << 17) |	/* toCPU */
+			   (1 << 18) |	/* isStatic */
+			   (3 << 19);	/* agingTime: старшая ступень */
+	}
+
+	rtl_sw_w(RTL_SWTCR0, RTL_EN_STOP_TLU | rtl_sw_r(RTL_SWTCR0));
+	ret = rtl819x_intsw_zhdat(RTL_SWTCR0, RTL_STOP_TLU_READY,
+				  RTL_STOP_TLU_READY);
+
+	if (ret) {
+		pr_err("rtl819x-sw: l2-sync: table lookup did not stop\n");
+		return ret;
+	}
+
+	for (i = 0; i < 8; i++)
+		rtl_sw_w(RTL_TCR(i), slovo[i]);
+
+	rtl_sw_w(RTL_SWTAA, RTL_SWTBL_BASE + (RTL_TYPE_L2_TABLE << 16) +
+			    ((row << 2 | col) * RTL_TBL_ENTRY_LEN));
+	rtl_sw_w(RTL_SWTACR, RTL_ACTION_START | RTL_CMD_FORCE);
+
+	ret = rtl819x_intsw_zhdat(RTL_SWTACR, RTL_ACTION_MASK,
+				  RTL_ACTION_DONE);
+
+	rtl_sw_w(RTL_SWTCR0, ~RTL_EN_STOP_TLU & rtl_sw_r(RTL_SWTCR0));
+
+	if (ret) {
+		pr_err("rtl819x-sw: l2-sync %pM write timed out\n", mac);
+		return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(rtl819x_wifi_sta_l2_sync);
 
 /* PVID порта: по два порта на регистр, чётный в младшей половине */
 static void rtl819x_intsw_pvid(unsigned int port, u16 vid)
@@ -1995,6 +2109,87 @@ static const struct of_device_id rtl819x_eth_of_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, rtl819x_eth_of_ids);
 
+/* ---- просмотр HW L2: /proc/rtl819x/l2 ---------------
+ * Дамп всех валидных записей таблицы L2 свитча: MAC (включая вычисленный
+ * MAC[5]), порты-члены (e6..e8 = ext-порты, e2 = процессорный), toCPU,
+ * статика, возраст, fid. Отладка связки «Wi-Fi станция <-> свитч».
+ */
+static int rtl819x_l2_pokaz(struct seq_file *m, void *v)
+{
+	u32 row, col, i;
+
+	seq_printf(m, "%-19s %-8s %-5s %-6s %-4s %-3s  %s\n",
+		   "MAC", "порты", "toCPU", "static", "age", "fid", "происхождение");
+
+	for (row = 0; row < RTL819X_L2_ROWS; row++) {
+		for (col = 0; col < RTL819X_L2_COLS; col++) {
+			u32 adres = RTL_SWTBL_BASE + (RTL819X_TYPE_L2 << 16) +
+				    ((row << 2 | col) * RTL_TBL_ENTRY_LEN);
+			u32 slovo[8], w0, w1, memb, ext, p;
+			u8 mac[6];
+			char portstr[32];
+			int n = 0, pusto;
+
+			for (i = 0; i < 8; i++)
+				slovo[i] = rtl_sw_r(adres + i * 4);
+			w0 = slovo[0];
+			w1 = slovo[1];
+
+			pusto = (((w1 >> 19) & 3) == 0) &&
+				(((w1 >> 18) & 1) == 0);
+			if (pusto)
+				continue;
+
+			mac[0] = w1 & 0xff;
+			mac[1] = (w0 >> 24) & 0xff;
+			mac[2] = (w0 >> 16) & 0xff;
+			mac[3] = (w0 >> 8) & 0xff;
+			mac[4] = w0 & 0xff;
+			mac[5] = (row ^ rtl819x_fid_hash[(w1 >> 23) & 3] ^
+				  mac[0] ^ mac[1] ^ mac[2] ^ mac[3] ^
+				  mac[4]) & 0xff;
+
+			portstr[0] = 0;
+			memb = (w1 >> 8) & 0x3f;
+			ext = (w1 >> 14) & 7;
+			for (p = 0; p < 6; p++)
+				if (memb & (1u << p))
+					n += snprintf(portstr + n,
+						      sizeof(portstr) - n,
+						      "%s%u", n ? "," : "", p);
+			for (p = 0; p < 3; p++)
+				if (ext & (1u << p))
+					n += snprintf(portstr + n,
+						      sizeof(portstr) - n,
+						      "%se%u", n ? "," : "",
+						      6 + p);
+			if (!n)
+				snprintf(portstr, sizeof(portstr), "-");
+
+			seq_printf(m, "%pM  %-8s %-5u %-6u 0x%-2x %-3u  %s\n",
+				   mac, portstr, (w1 >> 17) & 1,
+				   (w1 >> 18) & 1, (w1 >> 19) & 3,
+				   (w1 >> 23) & 3,
+				   ((w1 >> 17) & 1) ? "CPU-ловушка" :
+						      "выучено железом");
+		}
+	}
+
+	return 0;
+}
+
+static int rtl819x_l2_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rtl819x_l2_pokaz, NULL);
+}
+
+static const struct proc_ops rtl819x_l2_ops = {
+	.proc_open    = rtl819x_l2_open,
+	.proc_read    = seq_read,
+	.proc_lseek   = seq_lseek,
+	.proc_release = single_release,
+};
+
 /* ---- регистрация ------------------------------------------------------- */
 
 static int rtl819x_eth_probe(struct platform_device *pdev)
@@ -2092,8 +2287,11 @@ static int rtl819x_eth_probe(struct platform_device *pdev)
 
 	proc_create_single("rtl819x_spa", 0444, NULL, rtl819x_spa_pokaz);
 	proc_create("rtl819x_gnezda", 0644, NULL, &rtl819x_gnezda_ops);
+
 	proc_create("rtl819x_router", 0644, NULL, &rtl819x_router_ops);
 	proc_create("rtl819x_hs", 0644, NULL, &rtl819x_hs_ops);
+	proc_create("rtl819x_l2", 0444, NULL, &rtl819x_l2_ops);
+
 
 	netdev_info(dev, "Realtek RTL819x Ethernet at %pR, irq %d\n",
 		    platform_get_resource(pdev, IORESOURCE_MEM, 0), eth->irq);

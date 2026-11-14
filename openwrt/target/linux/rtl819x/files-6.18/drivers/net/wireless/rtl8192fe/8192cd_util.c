@@ -3164,6 +3164,16 @@ int	free_stainfo(struct rtl8192cd_priv *priv, struct stat_info *pstat)
 		DEBUG_ERR("illegal free an NULL stat obj\n");
 		return FAIL;
 	}
+
+	/* Снять статическую запись HW L2 станции
+	 * (внесена при ассоциации, см. 8192cd_sme.c). Функция в
+	 * rtl819x_eth.c; если записи нет — просто вернётся. */
+	{
+		extern int rtl819x_wifi_sta_l2_sync(const unsigned char *mac,
+						    int add);
+		rtl819x_wifi_sta_l2_sync(pstat->cmn_info.mac_addr, 0);
+	}
+
 #ifdef CONFIG_FON
 	int idx=wlan_find_idx_by_linux_name(priv->dev->name);
 	Fonclient *pFonClient;

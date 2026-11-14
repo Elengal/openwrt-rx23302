@@ -5403,7 +5403,7 @@ int check_hangup_pci(struct rtl8192cd_priv *priv)
 				}
 			}
 
-#if 0//defined(CONFIG_WLAN_HAL_8812FE)
+#if defined(CONFIG_WLAN_HAL_8812FE)	// было #if 0: включаем детектор TX-DMA-hang для 8812F
 			if (GET_CHIP_VER(priv) == VERSION_8812F) {
 				if(priv->pshare->tx_dma_status & BIT_TXPKTBUF_REQ_ERR){
 					priv->pshare->tx_dma_status1 |= priv->pshare->tx_dma_status;
@@ -11383,9 +11383,12 @@ void pwr_state(struct rtl8192cd_priv *priv, struct rx_frinfo *pfrinfo)
                     //GET_HAL_INTERFACE(priv)->APPSOffloadMACIDPauseHandler(priv, pstat->cmn_info.aid, 1);
 
 #else
-                    DEBUG_WARN("%s %d client into ps, set MACID sleep AID = %x \n",__FUNCTION__,__LINE__,REMAP_AID(pstat));
+                    /* Не усыпляем MACID: клиенты с агрессивным энергосбережением
+                       (PM вкл/выкл каждую секунду) вызывали паузу TX и замирания.
+                       Кадры спящему клиенту шлём сразу. */
+                    DEBUG_WARN("%s %d client into ps (MACID sleep OFF) AID = %x \n",__FUNCTION__,__LINE__,REMAP_AID(pstat));
                     DEBUG_WARN("Pwr_state jiffies = %lu \n",jiffies);
-                    GET_HAL_INTERFACE(priv)->SetMACIDSleepHandler(priv, 1, REMAP_AID(pstat));
+                    /* GET_HAL_INTERFACE(priv)->SetMACIDSleepHandler(priv, 1, REMAP_AID(pstat)); */
 #endif
 #ifndef STA_AGING_FUNC_OFFLOAD
 					if(pstat->txpause_flag ==0){
@@ -30674,6 +30677,15 @@ if(p != NULL && *(p+_ASOCREQ_RSN_AKM_type_IE_OFFSET_) == DOT11_AuthKeyType_SAE){
 		pstat->useShortPreamble = 1;
 
 	pstat->state |= WIFI_ASOC_STATE;
+
+	/* Станция -> статическая запись HW L2 на CPU-порте, иначе свитч
+	 * учит её на гнезде LAN1 и unicast к клиенту уходит в провод
+	 * (DHCP не доходит). Функция в rtl819x_eth.c. */
+	{
+		extern int rtl819x_wifi_sta_l2_sync(const unsigned char *mac,
+						    int add);
+		rtl819x_wifi_sta_l2_sync(pstat->cmn_info.mac_addr, 1);
+	}
 
 	if (status != _STATS_SUCCESSFUL_) {
 		DRV_RT_TRACE(priv, DRV_DBG_CONN_INFO, DRV_DBG_SERIOUS, "_STATS_RATE_FAIL_\n");
