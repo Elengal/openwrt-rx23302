@@ -6,7 +6,13 @@
 
 [Русский](#русский) · [English](#english)
 
-> Текущий релиз — **0.2.1**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Текущий релиз — **0.2.2**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Новое в 0.2.2: **скорость Wi-Fi исправлена** — драйвер терял кадры A-MSDU на приёме (TCP-паузы, аплинк 53–106 Мбит/с);
+> починено (RX-буферы 4600 + A-MSDU выключен как оптимизация на этом CPU): **DOWN 436–480, UP 423–485 Мбит/с**
+> (AP-мост, канон 300 МиБ, клиент у точки; заводская ~492/372). **L2-таблицы**: Wi-Fi-станции → статические
+> CPU-ловушки (стабильность). **PS-фикс** Wi-Fi (MACID не усыпляется + детектор TX-DMA-hang).
+> **Светодиод 2.4G починен** (регрессия с 0.2.0) + **настройка ламп в LuCI** (Система → LED Configuration):
+> Status и WiFi 2.4G, работают из коробки после прошивки, переживают перезагрузку.
 > Новое в 0.2.1: **свой MAC у каждой коробки** — eth0 читает заводской адрес из таблицы hwconfig во флеше
 > (в 0.2.0 все прошитые роутеры делили один `02:E0:4C:81:96:C1` — коллизии у соседей по сегменту);
 > VLAN и Wi-Fi наследуют его же. Аппаратному NAT корректный MAC обязателен.
@@ -57,7 +63,7 @@ OpenWrt не поддерживается.
 | ✅ Установка без UART | кнопка Reset при включении + TFTP — [docs/install-tftp.md](docs/install-tftp.md) |
 | ✅ Кнопка Reset | коротко — перезагрузка, держать 5+ с — сброс настроек |
 | ✅ MAC устройства | eth0 читает заводской адрес из таблицы hwconfig во флеше (у каждой коробки свой); VLAN и Wi-Fi наследуют; стабильный между перезагрузками |
-| ✅ Светодиоды | POWER, WAN, LAN1, LAN2 (линк и активность); 5G — горит и мигает от трафика (тест). **2.4G LED в 0.2.1 не горит** — см. «Что не работает» |
+| ✅ Светодиоды | POWER (аппаратно), WAN/LAN1/LAN2 (линк и активность, коммутатор); 5G — горит и мигает от трафика (HW-движок 8812F); **2.4G — горит и мигает от трафика (0.2.2)**; Status — ровно горит. **Настройка Status и 2.4G в LuCI** (Система → LED Configuration) |
 | ⚠️ Режим точки доступа | работает, настраивается вручную |
 
 ### Скорость: честные замеры
@@ -84,14 +90,28 @@ OpenWrt не поддерживается.
 эти строки освобождаются, и скорость возвращается. Смена режима NAT применяется перезагрузкой — включение
 на ходу нестабильно. Wi-Fi и реальный провайдер дадут меньше, чем проводной стенд.
 
+### Скорость Wi-Fi (0.2.2, честные замеры)
+
+Режим точки доступа (мост), клиент Redmi Note 11 Pro+ рядом с точкой (−12…−33 dBm), 5 ГГц канал 36 VHT80 2×2,
+канон 300 МиБ (curl/iperf3, TCP). Это **Wi-Fi throughput**, не проводной NAT (таблица выше — про NAT-роутинг).
+
+| Прошивка | DOWN | UP |
+|---|---|---|
+| Заводская `V1.24.137` | ~492 | ~372 |
+| Наша **0.2.2** | **436–480** | **423–485** |
+
+До 0.2.2 аплинк падал до 53–106 Мбит/с с TCP-паузами 5–8 с: драйвер терял кадры A-MSDU на приёме (сборка
+субфреймов по кускам голодала под нагрузкой). Починено: RX-буферы 4600 (кадр A-MSDU помещается целиком,
+сборка по кускам не нужна) + A-MSDU выключен как оптимизация (на этом MIPS накладные расходы агрегации на CPU
+больше выигрыша от неё). Ошибок приёма нет. 2.4G: путь чистый, 0 ошибок (клиент со старым 11n Wi-Fi даёт
+~27–33 Мбит/с — потолок клиента, не точки).
+
 ### Что не работает или не проверено
 
 - **Аппаратный NAT — тестовый режим (0.2.1-test)**: не включён по умолчанию; IPv6 и ICMP через него не идут;
   при коллизии строк NAPT возможны просадки (см. «Скорость: честные замеры»); смена режима — через перезагрузку.
 - **Режим точки доступа (мост)**: аппаратный NAT там не применим — сервис сам отказывается его включать,
   сеть не ломается.
-- **2.4G LED в 0.2.1 не горит** (регрессия против 0.1.2): причина найдена — вендорский LED-регистр 8197G
-  (`LEDCFG`) при инициализации остаётся нулевым; в работе. **Status** — пин найден (GPIO H1), заводится в 0.1.3.
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
 - **Двойники** — Transservice **TS-7322** (Ростелеком), Transservice **TS-7022** (МТС), **Билайн RX-22302** —
@@ -186,6 +206,15 @@ software, 1024-row NAPT table. The switch runs on OpenWrt's GPL
 `…-squashfs-tftp-factory.bin` over TFTP to 192.168.1.6 ([docs/install-tftp.md](docs/install-tftp.md));
 the Reset button works in OpenWrt (short press = reboot, 5+ s = factory reset); POWER/WAN/LAN1/LAN2/2.4G LEDs.
 
+**New in 0.2.2: Wi-Fi speed fixed (A-MSDU).** The vendor driver dropped A-MSDU frames on RX (the subframe
+gather assembly starved under load) → TCP stalls of 5–8 s, uplink 53–106 Mbit/s. Fixed: RX buffers raised
+to 4600 (a whole A-MSDU fits, no gather needed) and A-MSDU disabled as an optimisation (on this MIPS the
+aggregation CPU overhead outweighs the gain). **DOWN 436–480, UP 423–485 Mbit/s** (AP bridge, 300 MiB canon,
+client next to the AP; stock ~492/372). **L2 tables:** Wi-Fi stations get static CPU traps (stability).
+**Wi-Fi PS fix** (MACID not put to sleep + TX-DMA-hang detector for 8812F). **2.4G LED fixed** (regression
+since 0.2.0) + **LED configuration in LuCI** (System → LED Configuration): Status and WiFi 2.4G, work out of
+the box after flashing, survive reboots.
+
 **0.2.1: per-device MAC** — eth0 reads the factory address from the on-flash hwconfig table
 (all flashed units used to share one `02:E0:4C:81:96:C1` — collisions between neighbours on the
 same ISP segment); VLANs and Wi-Fi inherit it. A correct MAC is required by hardware NAT.
@@ -218,9 +247,23 @@ drops that flow to the software path — hence the rare ~430–440 Mbit/s runs; 
 returns. Switching the NAT mode applies via a reboot (live switching is unstable). Wi-Fi and a real ISP
 link will be slower than this wired bench.
 
-**Not yet:** 2.4G LED is dark in 0.2.1 (regression vs 0.1.2: the vendor LEDCFG register of the 8197G stays
-zero at init; being fixed), Status LED pin found (GPIO H1, shipping in 0.1.3), noisy Wi-Fi driver log,
-console `iwinfo <dev> info` prints usage (nl80211-only ucode module; LuCI is fine).
+**Wi-Fi speed (0.2.2, honest numbers).** Access-point (bridge) mode, Redmi Note 11 Pro+ client next to the
+AP (−12…−33 dBm), 5 GHz channel 36 VHT80 2×2, 300 MiB canon (curl/iperf3, TCP). This is **Wi-Fi throughput**,
+not wired NAT (the table above is NAT routing).
+
+| Firmware | DOWN | UP |
+|---|---|---|
+| Stock `V1.24.137` | ~492 | ~372 |
+| Ours **0.2.2** | **436–480** | **423–485** |
+
+Before 0.2.2 the uplink fell to 53–106 Mbit/s with 5–8 s TCP stalls (the driver dropped A-MSDU frames on RX).
+Fixed: RX buffers 4600 (a whole A-MSDU fits) + A-MSDU disabled as an optimisation (aggregation CPU overhead
+outweighs the gain on this MIPS). No RX errors. 2.4G: clean path, 0 errors (an old 11n client gives ~27–33
+Mbit/s — the client's ceiling, not the AP's).
+
+**Not yet:** noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module;
+LuCI is fine). LEDs: POWER is hardwired (always on); WAN/LAN1/LAN2 are driven by the switch and 5G by the
+8812F hardware LED engine — these are not LuCI-configurable; Status and 2.4G are (System → LED Configuration).
 **Hardware NAT is a test mode (0.2.1-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
 can cause dips (see "Speed: honest numbers"); switching the mode needs a reboot. In access-point (bridge)
 mode hardware NAT does not apply — the service refuses it and leaves the bridge intact.

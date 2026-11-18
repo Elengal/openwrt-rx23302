@@ -8,7 +8,11 @@ title: OpenWrt для Rotek RX-23302
 В официальном OpenWrt SoC **Realtek RTL8197F** не поддерживается — порт сделан с нуля:
 SoC, Ethernet и коммутатор RTL8367D, Wi-Fi (RTL8197G 2,4 ГГц и RTL8812FE 5 ГГц).
 
-**Текущий релиз — 0.2.1.** Готовые образы: [GitHub Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+**Текущий релиз — 0.2.2.** Готовые образы: [GitHub Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+
+Новое в 0.2.2: скорость Wi-Fi исправлена (A-MSDU: DOWN 436–480, UP 423–485 Мбит/с, AP-мост), L2-таблицы
+(CPU-ловушки для Wi-Fi-станций), PS-фикс Wi-Fi, светодиод 2.4G починен + настройка ламп в LuCI
+(Система → LED Configuration).
 
 ## Установка
 
