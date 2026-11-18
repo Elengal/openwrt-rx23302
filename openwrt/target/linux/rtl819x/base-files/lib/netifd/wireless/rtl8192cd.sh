@@ -504,6 +504,16 @@ drv_rtl8192cd_setup() {
 	for_each_interface "sta adhoc mesh monitor wds" rtl_unsupported_vif
 	for_each_interface "ap" rtl_setup_vif
 
+	# RX23302/8812F: A-MSDU выключен как ОПТИМИЗАЦИЯ, не как обход бага.
+	# Замер 18.11.2026 (канон 300 МиБ, Redmi у точки): amsdu=0 быстрее в обе стороны
+	# на этом MIPS: UP 409/485 vs 382/351, DOWN 426 vs 348 Мбит/с — накладные расходы
+	# сборки/разбора субфреймов на CPU съедают выигрыш от агрегации.
+	# Корень discard-ов (малые RX-буферы 2600 < A-MSDU 3839 → gather-сборка голодала)
+	# ПОЧИНЕН размером 4600 в 8192cd_cfg.h: A-MSDU рабочий, ошибок 0, можно вернуть
+	# через rtlmib IFACE set amsdu=2. Ставим ПОСЛЕ ifconfig up: open драйвера
+	# сбрасывает dot11nAMSDU в default(2).
+	rtl_apply_mib "$dev_ifname" "amsdu=0"
+
 	wireless_set_up
 }
 

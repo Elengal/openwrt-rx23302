@@ -4507,6 +4507,24 @@
 #endif
 #endif
 
+/* RX23302 / RTL8812F (PCI 10ec:f812): RX buffer must hold a whole A-MSDU
+ * (up to 3839B + headers). With smaller buffers every A-MSDU goes through
+ * the RX_BUFFER_GATHER assembly (get_subframe), which starves under load
+ * and discards frames -> TCP RTO stalls, UP ~50-100 Mbps instead of ~500.
+ * Proven 18.11.2026: amsdu=0 (A-MSDU off) -> UP 450-559, zero discards.
+ * This override keeps A-MSDU enabled and bypasses gather by sizing buffers
+ * above max A-MSDU. Applies to both radios (_1 = wlan1).
+ * RAM: NUM_RX_DESC * 4600 per radio. Verify: /proc/wlan1/rxdesc Dword0
+ * buffer-size field ~4400 (was ~2400 with 2600-byte buffers). */
+#undef MAX_RX_BUF_LEN
+#undef MIN_RX_BUF_LEN
+#undef MAX_RX_BUF_LEN_1
+#undef MIN_RX_BUF_LEN_1
+#define MAX_RX_BUF_LEN   4600
+#define MIN_RX_BUF_LEN   4600
+#define MAX_RX_BUF_LEN_1 4600
+#define MIN_RX_BUF_LEN_1 4600
+
 #ifdef CONFIG_WLAN_HAL
 #define PRE_ALLOCATED_HDR		(NUM_TX_DESC * 5)
 #else
