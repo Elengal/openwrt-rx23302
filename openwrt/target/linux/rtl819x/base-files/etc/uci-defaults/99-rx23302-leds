@@ -1,0 +1,23 @@
+#!/bin/sh
+# RX23302: register board LEDs in /etc/config/system so they work out of the
+# box after flashing and are editable in LuCI (System -> LED Configuration).
+#   Status    : steady on = system OK (no suspicious blinking).
+#   WiFi 2.4G : netdev on wlan0, link + tx/rx -> lit when radio up, blinks on
+#               traffic (same behaviour as the port LEDs and the 5G LED).
+# The 5G LED is driven by the RTL8812F hardware LED engine (reg 0x62), not by
+# gpio-leds, so it is not listed here and needs no user configuration.
+uci -q batch <<'EOF'
+set system.status_led=led
+set system.status_led.name='Status'
+set system.status_led.sysfs='green:status'
+set system.status_led.trigger='default-on'
+set system.wifi24_led=led
+set system.wifi24_led.name='WiFi 2.4G'
+set system.wifi24_led.sysfs='green:wifi2.4'
+set system.wifi24_led.trigger='netdev'
+set system.wifi24_led.dev='wlan0'
+set system.wifi24_led.mode='link tx rx'
+commit system
+EOF
+/etc/init.d/rx23302-led enable
+exit 0

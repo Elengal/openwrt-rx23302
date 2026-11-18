@@ -55,6 +55,17 @@
 			gpios = <&gpio1 25 GPIO_ACTIVE_LOW>;
 			default-state = "on";
 		};
+
+		/* RX23302: 2.4G WiFi LED on pin E1 (gpio1 offset 1, stock line 33).
+		 * E1 muxed to GPIO by setup.c (BSP_PIN_MUX_SEL17 0xB8000844 = 1<<28).
+		 * Stock drives it via leds-gpio netdev trigger on wlan0. Active level
+		 * verified on hardware; default-on for bring-up, netdev trigger set
+		 * via sysfs (device_name=wlan0) once confirmed. */
+		wifi24_led: wifi2.4 {
+			label = "green:wifi2.4";
+			gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;
+			default-state = "on";
+		};
 	};
 };
 

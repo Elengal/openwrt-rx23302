@@ -197,6 +197,12 @@ static int __init rtl_nastroit_vyvody(void)
 	 * отдаёт выводы 55 и 56 под GPIO. Пишем то же самое. */
 	REG32(RTL_PIN_MUX_0834) = (REG32(RTL_PIN_MUX_0834) & 0xF00FFFFF) | 0x03300000;
 
+	/* RX23302: 2.4G LED pin E1 -> GPIO function. SDK rtl819x_gpio_mux():
+	 * BSP_GPIO_PIN_E1 -> BSP_PIN_MUX_SEL17 (0xB8000844), mask 0xf<<28,
+	 * value 0x1<<28. Without this E1 is not writable as GPIO and the
+	 * wifi2.4 gpio-led stays dark (stock drives it via leds-gpio/netdev). */
+	REG32(0xB8000844) = (REG32(0xB8000844) & 0x0FFFFFFF) | 0x10000000;
+
 	pr_info("realtek: pin mux after 0800=%08x 0804=%08x 0808=%08x 0834=%08x\n",
 		REG32(RTL_PIN_MUX_0800), REG32(RTL_PIN_MUX_0804),
 		REG32(RTL_PIN_MUX_0808), REG32(RTL_PIN_MUX_0834));

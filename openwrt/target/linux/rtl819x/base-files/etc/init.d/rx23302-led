@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+# RX23302: re-assert the 2.4G LED pin E1 -> GPIO function on every boot.
+#
+# setup.c muxes E1 to GPIO early (arch_initcall), but the WiFi driver
+# re-programs the pinmux after its probe and reclaims E1, so the gpio-led
+# cannot drive it. Re-assert it here, after the WiFi driver has probed and
+# before init.d/led (START=96) applies the netdev trigger.
+#
+# BSP_PIN_MUX_SEL17 = 0xB8000844, E1 field bits 28-31 = 1 (GPIO function),
+# taken verbatim from the vendor SDK rtl819x_gpio_mux() case BSP_GPIO_PIN_E1.
+START=95
+
+start() {
+	local v
+	v=$(devmem 0xB8000844 2>/dev/null)
+	[ -n "$v" ] && devmem 0xB8000844 32 "$(printf '0x%08x' $(( v | 0x10000000 )))"
+}
