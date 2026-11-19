@@ -14,7 +14,8 @@
 <p>Своя прошивка <strong>OpenWrt (Linux 6.18)</strong> для роутера Ротек RX-23302 (Ростелеком / BeeLine / МТС).
 В официальном OpenWrt SoC <strong>Realtek RTL8197F</strong> не поддерживается — порт сделан с нуля:
 SoC, Ethernet и коммутатор RTL8367D, Wi-Fi (RTL8197G 2,4 ГГц и RTL8812FE 5 ГГц).</p>
-<p><strong>Текущий релиз — 0.2.2.</strong> Готовые образы: <a href="https://github.com/Elengal/openwrt-rx23302/releases">GitHub Releases</a>.</p>
+<p><strong>Текущий релиз — 0.2.3.</strong> Готовые образы: <a href="https://github.com/Elengal/openwrt-rx23302/releases">GitHub Releases</a>.</p>
+<p>Новое в 0.2.3: LuCI больше не «теряет» 5 ГГц и 11ac — драйвер выдавал план каналов текущего режима за возможности чипа, и любое сохранение в LuCI могло навсегда запереть 5 ГГц-радио в 2.4 ГГц (самозамок). Теперь отдаются регуляторные планы всех диапазонов чипа: выбор 5g/AC/VHT80 доступен всегда. Известные ограничения 0.2.3: sysupgrade/LuCI-прошивка может сорваться по OOM (надёжно — TFTP/mtd), DHCP на LAN по умолчанию включён (для AP-моста в чужую сеть — dhcp.lan.ignore=1).</p>
 <p>Новое в 0.2.2: скорость Wi-Fi исправлена (A-MSDU: DOWN 436–480, UP 423–485 Мбит/с, AP-мост), L2-таблицы (CPU-ловушки для Wi-Fi-станций), PS-фикс Wi-Fi, светодиод 2.4G починен + настройка ламп в LuCI (Система → LED Configuration).</p>
 <h2 id="_1">Установка</h2>
 <ul>

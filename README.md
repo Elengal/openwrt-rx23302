@@ -6,7 +6,11 @@
 
 [Русский](#русский) · [English](#english)
 
-> Текущий релиз — **0.2.2**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Текущий релиз — **0.2.3**: готовые образы в [Releases](https://github.com/Elengal/openwrt-rx23302/releases).
+> Новое в 0.2.3: **LuCI больше не «теряет» 5 ГГц и 11ac** — драйвер выдавал план каналов текущего режима
+> за возможности чипа, и любое сохранение в LuCI (даже переименование SSID) могло навсегда запереть
+> 5 ГГц-радио в 2.4 ГГц (самозамок, воспроизведён дважды). Теперь SIOCGIWRANGE отдаёт регуляторные планы
+> всех диапазонов чипа (8812F — 2.4+5, 8197G — 2.4): выбор 5g/AC/VHT80 в LuCI доступен всегда.
 > Новое в 0.2.2: **скорость Wi-Fi исправлена** — драйвер терял кадры A-MSDU на приёме (TCP-паузы, аплинк 53–106 Мбит/с);
 > починено (RX-буферы 4600 + A-MSDU выключен как оптимизация на этом CPU): **DOWN 436–480, UP 423–485 Мбит/с**
 > (AP-мост, канон 300 МиБ, клиент у точки; заводская ~492/372). **L2-таблицы**: Wi-Fi-станции → статические
@@ -104,7 +108,7 @@ OpenWrt не поддерживается.
 субфреймов по кускам голодала под нагрузкой). Починено: RX-буферы 4600 (кадр A-MSDU помещается целиком,
 сборка по кускам не нужна) + A-MSDU выключен как оптимизация (на этом MIPS накладные расходы агрегации на CPU
 больше выигрыша от неё). Ошибок приёма нет. 2.4G: путь чистый, 0 ошибок (клиент со старым 11n Wi-Fi даёт
-~27–33 Мбит/с — потолок клиента, не точки).
+~27–33 Мбит/с — потолок клиента, не точки). 0.2.3 путь данных не меняет — замеры 0.2.2 остаются в силе.
 
 ### Что не работает или не проверено
 
@@ -114,6 +118,15 @@ OpenWrt не поддерживается.
   сеть не ломается.
 - Драйвер Wi-Fi много пишет в журнал ядра.
 - Консольный `iwinfo wlan0 info` печатает справку (его ucode-модуль знает только nl80211); LuCI и `ubus call network.wireless status` работают.
+- **Обновление через LuCI/sysupgrade на этой плате может сорваться по OOM (0.2.3, known issue):** procd
+  копирует весь rootfs в RAM (ramroot для pivot_root), вендорский образ не влезает в свободную память
+  (~8.5 MB после размещения образа в /tmp). Симптом: после «прошить» роутер полулетаргичен (сеть мертва,
+  флеш не тронут), лечение — передёрнуть питание. Надёжные пути: TFTP через загрузчик
+  ([docs/install-tftp.md](docs/install-tftp.md)) или `mtd write` с бэкапом конфига. Планируем починить.
+- **DHCP-сервер на LAN включён по умолчанию:** при установке точкой доступа (мост) в сеть со своим DHCP
+  роутер конкурирует за выдачу адресов — клиент может получить шлюз на RX и потерять интернет.
+  Для AP-режима: `dhcp.lan.ignore=1` (+ `ra`/`dhcpv6` = disabled), в LuCI: Сеть → Интерфейсы → LAN →
+  DHCP-сервер → «Игнорировать интерфейс». В домовых сборках проекта уже выключено.
 - **Двойники** — Transservice **TS-7322** (Ростелеком), Transservice **TS-7022** (МТС), **Билайн RX-22302** —
   по описаниям то же железо, но **не проверялись**. Сначала сравните первую строку лога загрузки по UART
   (у нас `Realtek RTL8197F-VG boot code`). Могут отличаться настройка платы, гнёзда свитча и Wi-Fi.
@@ -206,6 +219,12 @@ software, 1024-row NAPT table. The switch runs on OpenWrt's GPL
 `…-squashfs-tftp-factory.bin` over TFTP to 192.168.1.6 ([docs/install-tftp.md](docs/install-tftp.md));
 the Reset button works in OpenWrt (short press = reboot, 5+ s = factory reset); POWER/WAN/LAN1/LAN2/2.4G LEDs.
 
+**New in 0.2.3: LuCI no longer "loses" 5 GHz / 11ac.** The driver published the current mode's channel plan
+as the chip's capabilities in SIOCGIWRANGE, so saving any LuCI form (even an SSID rename) could permanently
+lock a 5 GHz radio into 2.4 GHz (a self-lock, reproduced twice on the board). Now the regulatory channel
+plans of every band the chip supports are reported (RTL8812F dual-band, RTL8197G 2.4-only), so the
+5g / AC / VHT80 choices stay available in LuCI regardless of the current mode.
+
 **New in 0.2.2: Wi-Fi speed fixed (A-MSDU).** The vendor driver dropped A-MSDU frames on RX (the subframe
 gather assembly starved under load) → TCP stalls of 5–8 s, uplink 53–106 Mbit/s. Fixed: RX buffers raised
 to 4600 (a whole A-MSDU fits, no gather needed) and A-MSDU disabled as an optimisation (on this MIPS the
@@ -259,7 +278,7 @@ not wired NAT (the table above is NAT routing).
 Before 0.2.2 the uplink fell to 53–106 Mbit/s with 5–8 s TCP stalls (the driver dropped A-MSDU frames on RX).
 Fixed: RX buffers 4600 (a whole A-MSDU fits) + A-MSDU disabled as an optimisation (aggregation CPU overhead
 outweighs the gain on this MIPS). No RX errors. 2.4G: clean path, 0 errors (an old 11n client gives ~27–33
-Mbit/s — the client's ceiling, not the AP's).
+Mbit/s — the client's ceiling, not the AP's). 0.2.3 does not touch the data path — the 0.2.2 numbers stand.
 
 **Not yet:** noisy Wi-Fi driver log, console `iwinfo <dev> info` prints usage (nl80211-only ucode module;
 LuCI is fine). LEDs: POWER is hardwired (always on); WAN/LAN1/LAN2 are driven by the switch and 5G by the
@@ -267,6 +286,16 @@ LuCI is fine). LEDs: POWER is hardwired (always on); WAN/LAN1/LAN2 are driven by
 **Hardware NAT is a test mode (0.2.1-test):** off by default; IPv6/ICMP stay in software; NAPT row collisions
 can cause dips (see "Speed: honest numbers"); switching the mode needs a reboot. In access-point (bridge)
 mode hardware NAT does not apply — the service refuses it and leaves the bridge intact.
+
+**Known issues (0.2.3):** flashing via LuCI/sysupgrade can fail with OOM on this board — procd copies the
+whole rootfs into RAM (ramroot for pivot_root) and the vendor image does not fit into free memory
+(~8.5 MB once the image sits in /tmp). Symptom: after "flash" the router is half-dead (network down, flash
+untouched); recover by power-cycling. Reliable paths: TFTP via the bootloader
+([docs/install-tftp.md](docs/install-tftp.md)) or `mtd write` with a config backup. Fix planned.
+Also: the LAN DHCP server is on by default; in access-point (bridge) deployments into a network with its
+own DHCP the router races for lease assignment (clients may get a gateway on the RX and lose internet).
+For AP mode set `dhcp.lan.ignore=1` (and `ra`/`dhcpv6` = disabled) — LuCI: Network → Interfaces → LAN →
+DHCP Server → "Ignore interface".
 
 **Look-alikes** — Transservice **TS-7322** (Rostelecom), Transservice **TS-7022** (MTS), **Beeline RX-22302** —
 reportedly the same hardware, but **untested**. Compare the first UART boot line first (ours:
