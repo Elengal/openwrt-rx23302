@@ -449,6 +449,8 @@ EXTERN void validate_oper_rate(struct rtl8192cd_priv *priv);
 EXTERN void get_oper_rate(struct rtl8192cd_priv *priv);
 EXTERN int get_bssrate_set(struct rtl8192cd_priv *priv, int bssrate_ie, unsigned char **pbssrate, unsigned int *bssrate_len);
 EXTERN int get_available_channel(struct rtl8192cd_priv *priv);
+/* RX23302: chip regulatory capabilities for SIOCGIWRANGE, not the current mode's plan */
+EXTERN int rtl_reg_cap_channels(struct rtl8192cd_priv *priv, unsigned int *list, int max);
 EXTERN void set_rts_protect_all(struct rtl8192cd_priv *priv, unsigned char enable);
 EXTERN int is_which_band_channel(unsigned int channel, unsigned char band);
 EXTERN int is80MSubChannel(unsigned int channel, unsigned int channel2);

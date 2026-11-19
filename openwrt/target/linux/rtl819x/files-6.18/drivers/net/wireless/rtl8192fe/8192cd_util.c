@@ -4874,6 +4874,58 @@ int get_available_channel(struct rtl8192cd_priv *priv)
 	return SUCCESS;
 }
 
+/*
+ * RX23302: regulatory channel CAPABILITIES of the chip, for SIOCGIWRANGE (rtl_giwrange).
+ *
+ * get_available_channel() above builds priv->available_chnl from the CURRENT
+ * net_work_type: a 5 GHz radio configured as 2.4 (or not opened yet - driver default
+ * is BGN) publishes only 2.4 channels. iwinfo/LuCI read that list as the hardware
+ * capability, so "5 GHz" and 11ac silently vanish from the UI, and saving ANY LuCI
+ * form (even an SSID rename) then writes band=2g over a working config: a self-lock,
+ * caught on the board 03.09.2026 and again 18.11.2026 (see iwinfo patch 204 comment).
+ *
+ * Capabilities must not depend on the current mode. Report the regulatory plan of
+ * every band the chip supports, from the same static tables get_available_channel
+ * uses. Current band goes first so it stays complete under the wext limit
+ * IW_MAX_FREQUENCIES (32); RU = 13 + 16 = 29 channels, fits whole.
+ *
+ * 5 GHz support is a chip property: VERSION_8812F is dual band, VERSION_8197G is
+ * 2.4 only. band5GSelected is NOT a capability mask: it is a MIB whose default is
+ * all subbands on every chip. Returns the channel count (0 = caller keeps old list).
+ */
+int rtl_reg_cap_channels(struct rtl8192cd_priv *priv, unsigned int *list, int max)
+{
+	int reg, i, n = 0, has5 = 0, cur5;
+
+	reg = priv->pmib->dot11StationConfigEntry.dot11RegDomain;
+	if (reg < DOMAIN_FCC || reg >= DOMAIN_MAX)
+		reg = DOMAIN_FCC;	/* probe-time default, as osdep init uses */
+
+#if defined(CONFIG_WLAN_HAL_8812FE)
+	if (GET_CHIP_VER(priv) == VERSION_8812F)
+		has5 = 1;
+#endif
+
+	cur5 = (priv->pmib->dot11BssType.net_work_type & WIRELESS_11A) != 0;
+
+	if (cur5 && has5) {
+		for (i = 0; i < reg_channel_5g_full_band[reg-1].len && n < max; i++)
+			if (is_available_channel(priv, reg_channel_5g_full_band[reg-1].channel[i]))
+				list[n++] = reg_channel_5g_full_band[reg-1].channel[i];
+	}
+
+	for (i = 0; i < reg_channel_2_4g[reg-1].len && n < max; i++)
+		list[n++] = reg_channel_2_4g[reg-1].channel[i];
+
+	if (!cur5 && has5) {
+		for (i = 0; i < reg_channel_5g_full_band[reg-1].len && n < max; i++)
+			if (is_available_channel(priv, reg_channel_5g_full_band[reg-1].channel[i]))
+				list[n++] = reg_channel_5g_full_band[reg-1].channel[i];
+	}
+
+	return n;
+}
+
 void set_rts_protect_all(struct rtl8192cd_priv *priv, unsigned char enable)
 {
 	if (enable)

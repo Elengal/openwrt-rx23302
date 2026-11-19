@@ -947,22 +947,38 @@ int rtl_giwrange(struct net_device *dev,
 	range->encoding_size[1]=13;
 	range->num_encoding_sizes = 2;
 	range->max_encoding_tokens = 4;
-	range->num_channels = priv->available_chnl_num;
-	range->num_frequency = priv->available_chnl_num;
-	
-	for (i = 0; i < priv->available_chnl_num && i < IW_MAX_FREQUENCIES; i++) {
-		u32 m = 0;
-		/*
-		 * Было `range->freq[i].i = i + 1` - номер в массиве вместо номера канала.
-		 * На 2.4 ГГц совпадало случайно, на 5 ГГц канал 36 уходил как «1», и
-		 * libiwinfo считал 5G-радио двухгигагерцовым (channel <= 14).
-		 * ВЗЯТО: sowarden/hh71vm-openwrt (8881e78, GPL-2.0), 8192cd_comapi.c.
-		 */
-		range->freq[i].i = priv->available_chnl[i];
-		//range->freq[val].m = CH_HZ_ID_MAP[i].freqKHz * 100000;
-		MAP_CHANNEL_ID_TO_KHZ(priv->available_chnl[i], m);
-		range->freq[i].m = m* 100;
-		range->freq[i].e = 1;
+	/*
+	 * RX23302: SIOCGIWRANGE must report the chip's regulatory CAPABILITIES, not the
+	 * plan of the current mode (priv->available_chnl). Otherwise a 5 GHz radio running
+	 * 2.4 - or still down at boot, driver default BGN - looks 2.4-only to iwinfo/LuCI,
+	 * the 5 GHz band and 11ac disappear from the UI, and any LuCI save (even an SSID
+	 * rename) writes band=2g over the working config: self-lock, 03.09 and 18.11.2026.
+	 * rtl_reg_cap_channels() reads the same regulatory tables as get_available_channel
+	 * for every band the chip supports. Fallback to the old list if it returns 0.
+	 */
+	{
+		unsigned int cap_chnl[IW_MAX_FREQUENCIES];
+		int cap_n = rtl_reg_cap_channels(priv, cap_chnl, IW_MAX_FREQUENCIES);
+		const unsigned int *chnl = (cap_n > 0) ? cap_chnl : priv->available_chnl;
+		int chnl_num = (cap_n > 0) ? cap_n : priv->available_chnl_num;
+
+		range->num_channels = chnl_num;
+		range->num_frequency = chnl_num;
+
+		for (i = 0; i < chnl_num && i < IW_MAX_FREQUENCIES; i++) {
+			u32 m = 0;
+			/*
+			 * Было `range->freq[i].i = i + 1` - номер в массиве вместо номера канала.
+			 * На 2.4 ГГц совпадало случайно, на 5 ГГц канал 36 уходил как «1», и
+			 * libiwinfo считал 5G-радио двухгигагерцовым (channel <= 14).
+			 * ВЗЯТО: sowarden/hh71vm-openwrt (8881e78, GPL-2.0), 8192cd_comapi.c.
+			 */
+			range->freq[i].i = chnl[i];
+			//range->freq[val].m = CH_HZ_ID_MAP[i].freqKHz * 100000;
+			MAP_CHANNEL_ID_TO_KHZ(chnl[i], m);
+			range->freq[i].m = m* 100;
+			range->freq[i].e = 1;
+		}
 	}
 
 // Commented by Albert 2009/10/13
